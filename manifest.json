@@ -1,0 +1,16 @@
+{
+  "name": "CAIN - Consciente e Inteligente",
+  "short_name": "CAIN",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#0b0e14",
+  "theme_color": "#00f2ff",
+  "icons": [
+    {
+      "src": "cain_face.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

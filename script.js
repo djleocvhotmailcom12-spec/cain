@@ -457,3 +457,46 @@ async function executeWipe() {
         console.error("Erro no wipe:", e);
     }
 }
+
+// PWA Install Logic
+let deferredPrompt;
+const installPrompt = document.getElementById('pwa-install-prompt');
+const installAcceptBtn = document.getElementById('install-accept-btn');
+const installCloseBtn = document.getElementById('install-close-btn');
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    // Prevent the mini-infobar from appearing on mobile
+    e.preventDefault();
+    // Stash the event so it can be triggered later.
+    deferredPrompt = e;
+    // Update UI notify the user they can install the PWA
+    if (installPrompt) installPrompt.classList.remove('hidden');
+});
+
+if (installAcceptBtn) {
+    installAcceptBtn.addEventListener('click', async () => {
+        if (!deferredPrompt) return;
+        // Show the install prompt
+        deferredPrompt.prompt();
+        // Wait for the user to respond to the prompt
+        const { outcome } = await deferredPrompt.userChoice;
+        console.log(`User response to the install prompt: ${outcome}`);
+        // We've used the prompt, and can't use it again, throw it away
+        deferredPrompt = null;
+        // Hide the custom prompt
+        if (installPrompt) installPrompt.classList.add('hidden');
+    });
+}
+
+if (installCloseBtn) {
+    installCloseBtn.addEventListener('click', () => {
+        if (installPrompt) installPrompt.classList.add('hidden');
+    });
+}
+
+window.addEventListener('appinstalled', (event) => {
+    console.log('👍', 'appinstalled', event);
+    // Clear the deferredPrompt so it can be garbage collected
+    deferredPrompt = null;
+    if (installPrompt) installPrompt.classList.add('hidden');
+});

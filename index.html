@@ -6,6 +6,12 @@
     <title>CAIN - Consciente e Inteligente</title>
     <link rel="stylesheet" href="index.css">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#00f2ff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="cain_face.png">
+    <link rel="manifest" href="manifest.json">
 </head>
 <body>
     <div id="app">
@@ -73,6 +79,31 @@
             </div>
         </main>
     </div>
+
+    <!-- PWA Install Prompt (Centered Modal) -->
+    <div id="pwa-install-prompt" class="hidden">
+        <div class="install-card">
+            <div class="install-header">
+                <img src="cain_face.png" alt="CAIN">
+                <h3>INSTALAR CAIN</h3>
+            </div>
+            <p>Baixe o aplicativo para uma experiência de inteligência superior e sem interrupções.</p>
+            <div class="install-actions">
+                <button id="install-accept-btn">BAIXAR AGORA</button>
+                <button id="install-close-btn">MAIS TARDE</button>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => console.log('Service Worker registrado!', reg))
+                    .catch(err => console.log('Falha ao registrar Service Worker', err));
+            });
+        }
+    </script>
 </body>
 </html>
