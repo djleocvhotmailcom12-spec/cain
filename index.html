@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CAIN - Consciente e Inteligente</title>
+    <link rel="stylesheet" href="index.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>CAIN</h1>
+            <div class="intelligence-container">
+                Nível de Inteligência: <span id="intelligence-pct">0</span>%
+                <div id="status-hud" class="hud-panel">
+            <div class="hud-header">STATUS DO SISTEMA</div>
+            <div class="hud-content" id="sys-stats">
+                <div class="stat-row">CPU: <span id="cpu-load">0%</span></div>
+                <div class="stat-row">RAM: <span id="ram-usage">0%</span></div>
+                <div class="stat-row">NET: <span id="net-clients">1</span></div>
+            </div>
+        </div>
+
+        <div id="map-target-hud" class="hud-panel hidden">
+            <div class="hud-header">LOCALIZADOR ALVO</div>
+            <div class="map-container">
+                <iframe id="mini-map" frameborder="0"></iframe>
+                <div class="scanline"></div>
+            </div>
+            <button onclick="document.getElementById('map-target-hud').classList.add('hidden')" class="close-hud">X</button>
+        </div>
+    </header>
+
+        <main>
+            <div class="face-container">
+                <div class="head-wrapper" id="cain-head">
+                    <div class="human-face-img">
+                        <img src="cain_face.png" alt="CAIN Face">
+                    </div>
+                    <!-- Overlay Animations -->
+                    <div class="face-overlays">
+                        <div class="eye-overlay left-eye" id="eye-left">
+                            <div class="pupil"></div>
+                        </div>
+                        <div class="eye-overlay right-eye" id="eye-right">
+                            <div class="pupil"></div>
+                        </div>
+                        <div class="mouth-overlay" id="cain-mouth-v2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-container">
+                <div id="chat-box"></div>
+                <div class="input-area">
+                    <input type="text" id="user-input" placeholder="Ensine algo ao CAIN ou faça uma pergunta...">
+                    <button id="send-btn">Enviar</button>
+                    <button id="voice-btn">🎤</button>
+                </div>
+            </div>
+            <div id="lock-panel" class="hidden">
+                <div class="lock-content">
+                    <div class="lock-icon">⚠️</div>
+                    <h2>SISTEMA EM BLOQUEIO</h2>
+                    <div id="lock-timer">10:00</div>
+                    <p>O conhecimento será apagado permanentemente em:</p>
+                    <div class="lock-input-group">
+                        <input type="password" id="security-code" placeholder="Insira o código de segurança">
+                        <button id="unlock-btn">ABORTAR</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
