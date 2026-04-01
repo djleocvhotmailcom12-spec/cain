@@ -1,11 +1,12 @@
 const CACHE_NAME = 'cain-cache-v1';
 const ASSETS = [
-  './',
-  './index.html',
-  './index.css',
-  './script.js',
-  './manifest.json',
-  './cain_face.png'
+  '/',
+  '/index.html',
+  '/index.css',
+  '/script.js',
+  '/manifest.json',
+  '/cain_face.png',
+  '/favicon.ico'
 ];
 
 self.addEventListener('install', (event) => {

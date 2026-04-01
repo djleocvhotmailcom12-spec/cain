@@ -32,6 +32,56 @@ function updateIntelligence(stats) {
     }
 }
 
+// IndexedDB for Offline Memory
+let db;
+const dbName = "CAIN_Memory";
+const storeName = "knowledge";
+
+function initOfflineDB() {
+    const request = indexedDB.open(dbName, 1);
+    request.onupgradeneeded = (e) => {
+        db = e.target.result;
+        if (!db.objectStoreNames.contains(storeName)) {
+            db.createObjectStore(storeName);
+        }
+    };
+    request.onsuccess = (e) => db = e.target.result;
+}
+
+async function saveToOfflineMemory(key, value) {
+    if (!db) return;
+    const tx = db.transaction(storeName, "readwrite");
+    tx.objectStore(storeName).put(value, key.toLowerCase());
+}
+
+async function getFromOfflineMemory(key) {
+    return new Promise((resolve) => {
+        if (!db) return resolve(null);
+        const tx = db.transaction(storeName, "readonly");
+        const request = tx.objectStore(storeName).get(key.toLowerCase());
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+    });
+}
+
+async function syncKnowledgeToLocal() {
+    try {
+        addMessage('cain', "[SISTEMA]: Sincronizando memória local para uso offline...");
+        const res = await fetch('/knowledge/export');
+        const data = await res.json();
+        const keys = Object.keys(data);
+        
+        for (const key of keys) {
+            await saveToOfflineMemory(key, data[key]);
+        }
+        
+        addMessage('cain', `[SISTEMA]: Sincronização de ${keys.length} tópicos concluída. Memória offline ativa.`);
+        localStorage.setItem('cain_synced', 'true');
+    } catch (e) {
+        console.error("Erro na sincronização:", e);
+    }
+}
+
 async function syncIntelligence() {
     try {
         const res = await fetch('/stats');
@@ -354,13 +404,19 @@ async function sendMessage() {
             startLockdown();
         }
 
-        if (data.action) {
-            handleClientAction(data.action);
-        }
-
     } catch (error) {
-        console.error('Error:', error);
-        addMessage('cain', "Tive uma falha de conexão. Pode tentar novamente?");
+        console.log('Detectada falha de rede, tentando memória offline...');
+        clearTimeout(searchTimeout);
+        if (searchIndicator) searchIndicator.remove();
+
+        const localResult = await getFromOfflineMemory(message);
+        if (localResult) {
+            addMessage('cain', "[OFFLINE] " + localResult);
+            speak(localResult, 'pt-BR');
+        } else {
+            addMessage('cain', "Estou offline e não encontrei isso na minha memória local. Reconecte-se para que eu possa aprender.");
+            speak("Estou offline e não encontrei isso na minha memória local.", "pt-BR");
+        }
     }
 }
 
@@ -430,6 +486,15 @@ document.addEventListener('keypress', welcome, { once: true });
 window.onload = () => {
     loadVoices();
     syncIntelligence();
+    initOfflineDB();
+    
+    // Se estiver instalado, verifica se precisa sincronizar
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
+        if (!localStorage.getItem('cain_synced')) {
+            setTimeout(syncKnowledgeToLocal, 2000);
+        }
+    }
+    
     setInterval(syncIntelligence, 30000); // Poll every 30s
     setInterval(syncSystemStats, 5000); // Poll every 5s (HUD real-time)
 };
@@ -446,7 +511,7 @@ document.addEventListener('mousemove', (e) => {
 
 // Lockdown Mode Logic
 let lockTimer = null;
-let timeLeft = 600;
+let timeLeft = 300; // 5 minutos
 
 function startLockdown() {
     const lockPanel = document.getElementById('lock-panel');
@@ -458,7 +523,7 @@ function startLockdown() {
     document.body.classList.add('lockdown-active');
     
     // Reset timer
-    timeLeft = 600;
+    timeLeft = 300;
     if (lockTimer) clearInterval(lockTimer);
     
     lockTimer = setInterval(() => {
@@ -466,13 +531,14 @@ function startLockdown() {
         const mins = Math.floor(timeLeft / 60);
         const secs = timeLeft % 60;
         timerDisplay.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        if (timeLeft === 600) speak("MODO DE BLOQUEIO ATIVADO. AUTODESTRUIÇÃO EM 10 MINUTOS.", "pt-BR");
         
-        // Avisos periódicos (cada minuto)
+        if (timeLeft === 299) speak("MODO DE BLOQUEIO ATIVADO. AUTODESTRUIÇÃO EM 5 MINUTOS.", "pt-BR");
+        
+        // Avisos periódicos
         if (timeLeft > 60 && timeLeft % 60 === 0) {
             speak(`Faltam ${mins} minutos para a limpeza total.`, "pt-BR");
         } else if (timeLeft === 60) {
-            speak("Atenção: Um minuto restante.", "pt-BR");
+            speak("Atenção: Um minuto restante para o desligamento total.", "pt-BR");
         } else if (timeLeft === 30) {
             speak("30 segundos restantes.", "pt-BR");
         } else if (timeLeft === 15) {
@@ -511,7 +577,7 @@ function stopLockdown() {
     clearInterval(lockTimer);
     lockPanel.classList.add('hidden');
     document.body.classList.remove('lockdown-active');
-    timeLeft = 600;
+    timeLeft = 300;
     securityInput.value = "";
     addMessage('cain', "Bloqueio cancelado. Sistema restaurado.");
     speak("Bloqueio cancelado. Sistema restaurado.", "pt-BR");
@@ -568,4 +634,7 @@ window.addEventListener('appinstalled', (event) => {
     // Clear the deferredPrompt so it can be garbage collected
     deferredPrompt = null;
     if (installPrompt) installPrompt.classList.add('hidden');
+    
+    // Inicia sincronização imediata após instalação
+    setTimeout(syncKnowledgeToLocal, 1000);
 });

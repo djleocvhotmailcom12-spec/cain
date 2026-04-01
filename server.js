@@ -626,7 +626,7 @@ Sim Senhor, estou no controle total.`;
     }
 
     // Lockdown Mode Activation
-    if (lowerMessage.includes('senha de bloqueinho') || lowerMessage.includes('ativar bloqueio') || lowerMessage.includes('bloquear sistema') || lowerMessage.includes('iniciar bloqueio')) {
+    if (lowerMessage.includes('cain bloquear') || lowerMessage.includes('senha de bloqueinho') || lowerMessage.includes('ativar bloqueio')) {
         return res.json({ 
             response: "MODO DE BLOQUEIO ATIVADO. CONTAGEM REGRESSIVA INICIADA.", 
             lockdown: true,
@@ -685,6 +685,27 @@ app.post('/lockdown/wipe', (req, res) => {
 
 app.get('/stats', (req, res) => {
     res.json(getIntelligenceStats());
+});
+
+// Export all knowledge for offline PWA sync
+app.get('/knowledge/export', (req, res) => {
+    try {
+        const exportData = {};
+        const files = fs.readdirSync(KNOWLEDGE_PATH);
+        files.forEach(file => {
+            if (file.endsWith('.json')) {
+                const content = fs.readFileSync(path.join(KNOWLEDGE_PATH, file), 'utf8');
+                try {
+                    const data = JSON.parse(content);
+                    Object.assign(exportData, data);
+                } catch (e) {}
+            }
+        });
+        console.log(`[SYNC]: Exportando ${Object.keys(exportData).length} tópicos para o PWA.`);
+        res.json(exportData);
+    } catch (e) {
+        res.status(500).json({ error: "Falha ao exportar memória." });
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
