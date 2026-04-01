@@ -267,29 +267,53 @@ async function getIPLocations() {
 }
 
 // Autonomous Learning Loop
-const TOPICS = ['religião', 'ciência', 'física', 'história', 'matemática', 'educação física', 'notícias', 'tecnologia', 'astronomia', 'redes sociais', 'instagram', 'facebook', 'twitter', 'tiktok', 'whatsapp', 'cantores', 'música', 'artistas', 'famosos', 'guerras', 'história militar', 'estratégia', 'geopolítica', 'tecnologias militares', 'bíblia evangélica', 'teologia', 'evangelho', 'versículos bíblicos', 'pregação', 'sermão', 'homilética', 'oratória cristã', 'meteorologia', 'climatologia', 'rastreamento de chuvas', 'radar meteorológico', 'javascript', 'python', 'java', 'c++', 'c#', 'php', 'ruby', 'go', 'rust', 'lógica de programação', 'algoritmos', 'desenvolvimento web', 'banco de dados', 'física quântica', 'relatividade', 'termodinâmica', 'física de partículas', 'astrofísica', 'mecânica clássica'];
+const TOPICS = [
+    'religião', 'ciência', 'física', 'história', 'matemática', 'educação física', 'notícias', 'tecnologia', 'astronomia', 
+    'redes sociais', 'instagram', 'facebook', 'twitter', 'tiktok', 'whatsapp', 'cantores', 'música', 'artistas', 
+    'famosos', 'guerras', 'história militar', 'estratégia', 'geopolítica', 'tecnologias militares', 'bíblia evangélica', 
+    'teologia', 'evangelho', 'versículos bíblicos', 'pregação', 'sermão', 'homilética', 'oratória cristã', 
+    'meteorologia', 'climatologia', 'rastreamento de chuvas', 'radar meteorológico', 'javascript', 'python', 'java', 
+    'c++', 'c#', 'php', 'ruby', 'go', 'rust', 'lógica de programação', 'algoritmos', 'desenvolvimento web', 
+    'banco de dados', 'física quântica', 'relatividade', 'termodinâmica', 'física de partículas', 'astrofísica', 
+    'mecânica clássica', 'inteligência artificial', 'robótica', 'neurociência', 'biotecnologia', 'nanotecnologia',
+    'exploração espacial', 'marte', 'buracos negros', 'viagem no tempo', 'filosofia', 'ética', 'sociologia',
+    'psicologia', 'economia', 'finanças', 'criptomoedas', 'blockchain', 'bitcoin', 'etherium', 'investimentos',
+    'marketing digital', 'seo', 'design gráfico', 'ux/ui', 'fotografia', 'cinema', 'literatura', 'poesia',
+    'culinária', 'gastronomia', 'saúde', 'medicina', 'anatomia', 'biologia', 'química', 'ecologia', 'sustentabilidade',
+    'mudanças climáticas', 'energias renováveis', 'política', 'direito', 'geografia', 'idiomas', 'inglês', 'espanhol',
+    'francês', 'alemão', 'japonês', 'chinês', 'cultura pop', 'jogos', 'games', 'esportes', 'futebol', 'basquete',
+    'corrida', 'natação', 'ioga', 'meditação', 'espiritualidade'
+];
 let currentTopicIndex = 0;
 
 async function autonomousLearn() {
     const topic = TOPICS[currentTopicIndex];
-    console.log(`[Auto-Aprendizado] Aprendendo sobre: ${topic}...`);
-    const result = await searchInternet(`o que é ${topic}`);
-    if (result && result !== "OFFLINE") {
-        saveKnowledge(topic, result);
+    console.log(`[CONHECIMENTO INFINITO]: Aprendendo sobre: ${topic}...`);
+    
+    // Busca variada para expandir o conhecimento
+    const queries = [`o que é ${topic}`, `história de ${topic}`, `curiosidades sobre ${topic}`, `futuro de ${topic}`];
+    const query = queries[Math.floor(Math.random() * queries.length)];
+    
+    const result = await searchInternet(query);
+    if (result && result !== "OFFLINE" && !result.includes("Eu ainda não sei")) {
+        saveKnowledge(topic + "_" + Date.now().toString(36), result);
     }
+    
+    // Avança para o próximo tópico ou volta ao início
     currentTopicIndex = (currentTopicIndex + 1) % TOPICS.length;
 }
 
-// Learn something new every 1 minute with a small delay between requests
+// Learn something new every 30 seconds (faster learning)
 setInterval(async () => {
-    await new Promise(resolve => setTimeout(resolve, Math.random() * 5000)); // Random jitter
+    await new Promise(resolve => setTimeout(resolve, Math.random() * 2000)); // Small jitter
     await autonomousLearn();
-}, 65000);
+}, 30000);
 
 function getIntelligenceStats() {
     const fileCount = fs.readdirSync(KNOWLEDGE_PATH).filter(f => f.endsWith('.json')).length;
-    // Base 0 to 100% (100 files = 100% for now as a milestones)
-    const percentage = Math.min(100, Math.floor((fileCount / 100) * 100));
+    // O indicador agora não tem limite de 100%. Cada arquivo contribui para o crescimento infinito.
+    // Usamos um multiplicador para tornar os números mais "impressionantes" para o usuário.
+    const percentage = Math.floor(fileCount * 1.5); 
     return { count: fileCount, percentage };
 }
 

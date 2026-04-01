@@ -12,8 +12,24 @@ const intelFill = document.getElementById('intelligence-fill');
 
 function updateIntelligence(stats) {
     if (!stats) return;
-    if (intelPct) intelPct.textContent = stats.percentage;
-    if (intelFill) intelFill.style.width = stats.percentage + '%';
+    const pct = stats.percentage;
+    if (intelPct) intelPct.textContent = pct;
+    
+    if (intelFill) {
+        // Mostra o progresso real, mesmo se passar de 100% (a barra vai resetar visualmente a cada 100% para efeito de 'níveis')
+        const visualPct = pct % 100;
+        intelFill.style.width = (pct >= 100 ? 100 : visualPct) + '%';
+        
+        // Se passar de 100%, muda a cor ou adiciona brilho extra
+        if (pct >= 100) {
+            intelFill.classList.add('overload');
+            const level = Math.floor(pct / 100);
+            intelPct.parentElement.setAttribute('data-level', `NÍVEL ${level}`);
+        } else {
+            intelFill.classList.remove('overload');
+            intelPct.parentElement.removeAttribute('data-level');
+        }
+    }
 }
 
 async function syncIntelligence() {
