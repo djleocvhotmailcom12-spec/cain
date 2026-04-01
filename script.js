@@ -68,6 +68,11 @@ async function singLyrics(text) {
     }
     
     face.classList.remove('singer-active');
+    
+    // Restart recognition after singing
+    if (alwaysListen && !isSpeaking) {
+        try { recognition.start(); } catch(e) {}
+    }
 }
 
 function handleClientAction(action) {
@@ -167,6 +172,8 @@ const recognition = SpeechRecognition ? new SpeechRecognition() : null;
 const synth = window.speechSynthesis;
 
 let isSpeaking = false;
+let alwaysListen = false;
+let recognitionActive = false;
 let currentLanguage = 'pt-BR';
 let selectedVoice = null;
 
@@ -219,28 +226,63 @@ setInterval(animateEyes, 30); // Higher frequency for smooth damping
 
 if (recognition) {
     recognition.lang = currentLanguage;
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = false;
 
+    recognition.onstart = () => {
+        recognitionActive = true;
+        voiceBtn.style.boxShadow = '0 0 15px var(--primary-color)';
+        voiceBtn.classList.add('listening');
+    };
+
     recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        userInput.value = transcript;
-        sendMessage();
+        const last = event.results.length - 1;
+        const transcript = event.results[last][0].transcript.trim();
+        if (transcript) {
+            userInput.value = transcript;
+            sendMessage();
+        }
+    };
+
+    recognition.onerror = (event) => {
+        console.warn("Speech recognition error:", event.error);
     };
 
     recognition.onend = () => {
+        recognitionActive = false;
         voiceBtn.style.boxShadow = 'none';
+        voiceBtn.classList.remove('listening');
+        
+        // Auto-restart if alwaysListen is on and CAIN is not speaking
+        if (alwaysListen && !isSpeaking) {
+            setTimeout(() => {
+                if (alwaysListen && !isSpeaking && !recognitionActive) {
+                    try { recognition.start(); } catch(e) {}
+                }
+            }, 300);
+        }
     };
 }
 
-voiceBtn.addEventListener('click', () => {
-    if (recognition) {
-        recognition.start();
-        voiceBtn.style.boxShadow = '0 0 15px white';
+function toggleVoice() {
+    if (!recognition) return alert('Seu navegador não suporta reconhecimento de voz.');
+    
+    if (alwaysListen) {
+        alwaysListen = false;
+        recognition.stop();
+        addMessage('cain', "Microfone desativado.");
+        speak("Microfone desativado.");
     } else {
-        alert('Seu navegador não suporta reconhecimento de voz.');
+        alwaysListen = true;
+        try { 
+            recognition.start(); 
+            addMessage('cain', "Microfone sempre ativo ativado. Estou ouvindo.");
+            speak("Microfone sempre ativo ativado. Estou ouvindo.");
+        } catch(e) { console.error(e); }
     }
-});
+}
+
+voiceBtn.addEventListener('click', toggleVoice);
 
 async function sendMessage() {
     const message = userInput.value.trim();
@@ -333,6 +375,8 @@ function speak(text, lang = 'pt-BR') {
     utterance.onstart = () => {
         isSpeaking = true;
         document.body.classList.add('speaking');
+        // Stop recognition to prevent CAIN from hearing itself
+        if (recognitionActive) recognition.stop();
     };
 
     utterance.onend = () => {
@@ -340,6 +384,15 @@ function speak(text, lang = 'pt-BR') {
         document.body.classList.remove('speaking');
         // Return pupils to center
         pupils.forEach(p => p.style.transform = `translate(0, 0)`);
+        
+        // Restart recognition if it was supposed to be on
+        if (alwaysListen) {
+            setTimeout(() => {
+                if (alwaysListen && !isSpeaking && !recognitionActive) {
+                    try { recognition.start(); } catch(e) {}
+                }
+            }, 500);
+        }
     };
 
     synth.speak(utterance);

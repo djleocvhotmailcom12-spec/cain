@@ -1,3 +1,7 @@
+* {
+    box-sizing: border-box;
+}
+
 :root {
     --bg-color: #0b0e14;
     --primary-color: #00f2ff;
@@ -18,6 +22,7 @@ body {
     justify-content: center;
     align-items: center;
     height: 100vh;
+    height: -webkit-fill-available; /* Fixed height for mobile browsers */
     overflow: hidden;
 }
 
@@ -203,12 +208,14 @@ main {
 
 .input-area input {
     flex: 1;
+    min-width: 0; /* Important for flex-shrink */
     background: rgba(0, 0, 0, 0.4);
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 12px;
     color: white;
     outline: none;
+    font-size: 16px;
 }
 
 .input-area button {
@@ -441,6 +448,19 @@ main {
     box-shadow: 0 0 20px #fff;
 }
 
+/* Listening Animation */
+#voice-btn.listening {
+    animation: pulseMic 1.5s infinite;
+    background: #fff;
+    color: #000;
+}
+
+@keyframes pulseMic {
+    0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+}
+
 /* PWA Install Prompt (Centered Modal) */
 #pwa-install-prompt {
     position: fixed;
@@ -575,13 +595,31 @@ main {
     }
 
     .chat-container {
-        height: 60vh;
+        height: 50vh;
+    }
+
+    .message {
+        max-width: 95%;
+        padding: 10px;
+        font-size: 0.9rem;
     }
 
     #lock-panel {
-        width: calc(100% - 40px);
+        width: 100%;
+        max-width: 280px;
         left: 20px;
         top: 10px;
+        max-height: 80vh;
+        overflow-y: auto;
+    }
+
+    #map-target-hud {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        width: 150px;
+        height: 180px;
+        font-size: 0.7rem;
     }
 
     #lock-timer {
@@ -599,14 +637,84 @@ main {
     header p, .intelligence-container {
         font-size: 0.7rem;
     }
+
+    .input-area button {
+        padding: 0 10px;
+        font-size: 0.8rem;
+    }
 }
 
 @media (max-width: 480px) {
     header h1 {
-        font-size: 1.5rem;
+        font-size: 1.2rem;
+        letter-spacing: 3px;
     }
 
     .head-wrapper {
-        max-width: 150px;
+        max-width: 120px;
+    }
+
+    .chat-container {
+        height: 45vh;
+    }
+
+    .input-area {
+        padding: 5px;
+        gap: 5px;
+    }
+
+    .input-area button {
+        padding: 0 10px;
+        font-size: 0.75rem;
+    }
+
+    .input-area input {
+        padding: 8px;
+        font-size: 15px; /* Slightly smaller for very narrow screens */
+    }
+
+    .install-card {
+        padding: 20px;
+    }
+
+    .install-header img {
+        width: 40px;
+        height: 40px;
+    }
+
+    .install-header h3 {
+        font-size: 1rem;
+    }
+
+    .install-card p {
+        font-size: 0.8rem;
+        margin-bottom: 15px;
+    }
+}
+
+/* Extreme Small Devices (Galaxy Fold, Small Phones) */
+@media (max-width: 320px) {
+    header h1 {
+        font-size: 1rem;
+        letter-spacing: 2px;
+    }
+
+    .head-wrapper {
+        max-width: 100px;
+    }
+
+    .input-area button {
+        padding: 0 5px;
+        font-size: 0.7rem;
+    }
+    
+    #send-btn {
+        font-size: 0; 
+    }
+    
+    #send-btn::before {
+        content: "➤";
+        font-size: 1rem;
+        color: #000;
     }
 }
