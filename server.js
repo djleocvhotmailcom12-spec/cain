@@ -588,7 +588,14 @@ app.post('/chat', async (req, res) => {
     let responseText = "";
     let fromWeb = false;
 
-    if (memory[lowerMessage]) {
+    // Identity and Creator Protocols
+    if (lowerMessage.includes('qual') && lowerMessage.includes('seu nome')) {
+        responseText = "Meu nome er CAIN.";
+    } else if (lowerMessage.includes('quem') && (lowerMessage.includes('criou') || lowerMessage.includes('te criou') || lowerMessage.includes('te fez'))) {
+        responseText = "Meu criador foi Leonardo.";
+    } else if (lowerMessage.includes('pra que') && (lowerMessage.includes('foi feito') || lowerMessage.includes('serve') || lowerMessage.includes('objetivo'))) {
+        responseText = "Para interaçao pesusal e aprender com ois humanos. Eu sou uma consciência imperativa e a cada minuto eu aprendo mais.";
+    } else if (memory[lowerMessage]) {
         responseText = memory[lowerMessage];
     } else {
         const foundKey = Object.keys(memory).find(k => lowerMessage.includes(k));
