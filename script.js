@@ -9,6 +9,13 @@ const pupils = document.querySelectorAll('.pupil');
 // Intelligence UI Elements
 const intelPct = document.getElementById('intelligence-pct');
 const intelFill = document.getElementById('intelligence-fill');
+const bioStatus = document.getElementById('bio-status');
+
+// Biometric State
+let faceMatcher = null;
+let recognizedUser = "VISITANTE";
+let labeledDescriptors = [];
+let modelsLoaded = false;
 
 function updateIntelligence(stats) {
     if (!stats) return;
@@ -404,6 +411,11 @@ async function sendMessage() {
             startLockdown();
         }
 
+        // Se for comando de aprendizado de rosto
+        if (message.toLowerCase().includes('aprenda meu rosto')) {
+            learnFace("Leonardo");
+        }
+
     } catch (error) {
         console.log('Detectada falha de rede, tentando memória offline...');
         clearTimeout(searchTimeout);
@@ -497,7 +509,141 @@ window.onload = () => {
     
     setInterval(syncIntelligence, 30000); // Poll every 30s
     setInterval(syncSystemStats, 5000); // Poll every 5s (HUD real-time)
+    
+    // Inicia Biometria
+    initBiometrics();
 };
+
+// Biometric Integration (face-api.js)
+async function initBiometrics() {
+    if (bioStatus) bioStatus.textContent = "CARREGANDO...";
+    
+    try {
+        const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+        await Promise.all([
+            faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+            faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+            faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+        ]);
+        
+        modelsLoaded = true;
+        console.log("Modelos Biométricos carregados.");
+        startWebcam();
+    } catch (e) {
+        console.error("Erro ao carregar modelos:", e);
+        if (bioStatus) bioStatus.textContent = "ERRO MOD";
+    }
+}
+
+async function startWebcam() {
+    const video = document.getElementById('video');
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        video.srcObject = stream;
+        if (bioStatus) bioStatus.textContent = "ATIVO";
+        
+        // Inicia loop de reconhecimento
+        setInterval(detectFace, 3000);
+    } catch (e) {
+        console.warn("Câmera não disponível:", e);
+        if (bioStatus) bioStatus.textContent = "SEM CAM";
+    }
+}
+
+async function detectFace() {
+    if (!modelsLoaded) return;
+    const video = document.getElementById('video');
+    
+    const detections = await faceapi.detectAllFaces(video).withFaceLandmarks().withFaceDescriptors();
+    
+    if (detections.length > 0) {
+        // Se tivermos perfis salvos, tentamos reconhecer
+        if (faceMatcher && labeledDescriptors.length > 0) {
+            const results = detections.map(d => faceMatcher.findBestMatch(d.descriptor));
+            const bestMatch = results[0];
+            
+            if (bestMatch.label !== 'unknown') {
+                if (recognizedUser !== bestMatch.label) {
+                    recognizedUser = bestMatch.label;
+                    if (bioStatus) {
+                        bioStatus.textContent = recognizedUser.toUpperCase();
+                        bioStatus.classList.add('identified');
+                    }
+                    speak(`Identificado: ${recognizedUser}. Bem-vindo, senhor.`, "pt-BR");
+                    addMessage('cain', `[BIO]: Usuário reconhecido: ${recognizedUser}.`);
+                }
+            } else {
+                recognizedUser = "VISITANTE";
+                if (bioStatus) {
+                    bioStatus.textContent = "ANÔNIMO";
+                    bioStatus.classList.remove('identified');
+                }
+            }
+        } else {
+            // Se vir um rosto mas não tiver perfis, tenta carregar do servidor
+            await loadBiometricProfiles();
+        }
+    }
+}
+
+async function loadBiometricProfiles() {
+    try {
+        const res = await fetch('/knowledge/export');
+        const data = await res.json();
+        
+        const profiles = [];
+        for (const key in data) {
+            if (key.includes('bio_profile_')) {
+                const profile = data[key];
+                const descriptors = [new Float32Array(Object.values(profile.descriptor))];
+                profiles.push(new faceapi.LabeledFaceDescriptors(profile.name, descriptors));
+            }
+        }
+        
+        if (profiles.length > 0) {
+            labeledDescriptors = profiles;
+            faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+            console.log(`Carregados ${profiles.length} perfis biométricos.`);
+        }
+    } catch (e) {
+        console.error("Erro ao carregar perfis:", e);
+    }
+}
+
+async function learnFace(name = "Leonardo") {
+    if (!modelsLoaded) return speak("Aguarde o sistema carregar completamente.", "pt-BR");
+    
+    addMessage('cain', "[SISTEMA]: Iniciando captura biométrica. Olhe para a câmera...");
+    speak("Iniciando captura biométrica. Por favor, olhe para a câmera.", "pt-BR");
+    
+    const video = document.getElementById('video');
+    const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+    
+    if (detection) {
+        const profile = {
+            name: name,
+            descriptor: Array.from(detection.descriptor),
+            timestamp: Date.now()
+        };
+        
+        // Salva no servidor como um conhecimento especial
+        const res = await fetch('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                message: `cain aprenda que bio_profile_${name.toLowerCase()} é ${JSON.stringify(profile)}` 
+            })
+        });
+        
+        if (res.ok) {
+            speak(`Perfil biométrico de ${name} salvo com sucesso. Eu te conheço agora.`, "pt-BR");
+            addMessage('cain', `[SISTEMA]: Biometria de ${name} sincronizada.`);
+            await loadBiometricProfiles();
+        }
+    } else {
+        speak("Não consegui detectar seu rosto. Tente se aproximar mais.", "pt-BR");
+    }
+}
 
 // Mouse tracking for head and eyes
 document.addEventListener('mousemove', (e) => {

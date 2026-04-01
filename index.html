@@ -12,6 +12,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="apple-touch-icon" href="cain_face.png">
     <link rel="manifest" href="manifest.json">
+    <!-- Biometrics: face-api.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 </head>
 <body>
     <div id="app">
@@ -25,6 +27,7 @@
                 <div class="stat-row">CPU: <span id="cpu-load">0%</span></div>
                 <div class="stat-row">RAM: <span id="ram-usage">0%</span></div>
                 <div class="stat-row">NET: <span id="net-clients">1</span></div>
+                <div class="stat-row bio-stat">BIO: <span id="bio-status">OFFLINE</span></div>
             </div>
         </div>
 
@@ -94,6 +97,10 @@
             </div>
         </div>
     </div>
+
+    <!-- Hidden Video for Biometric Processing -->
+    <video id="video" width="720" height="560" autoplay muted style="display: none;"></video>
+    <canvas id="overlay" style="display: none;"></canvas>
 
     <script src="script.js"></script>
     <script>

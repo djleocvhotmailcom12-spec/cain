@@ -26,6 +26,16 @@ body {
     overflow: hidden;
 }
 
+.bio-stat { 
+    color: var(--secondary-color);
+    font-weight: bold;
+    text-shadow: 0 0 5px var(--secondary-color);
+}
+.bio-stat span.identified {
+    color: #4CAF50;
+    text-shadow: 0 0 10px #4CAF50;
+}
+
 #app {
     width: 90%;
     max-width: 1200px;
