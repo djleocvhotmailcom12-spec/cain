@@ -12,7 +12,8 @@ const PORT = 3100;
 const KNOWLEDGE_PATH = path.join(__dirname, 'knowledge');
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(__dirname));
 
 const ADMIN_TOKEN = "CAIN_MASTER_TOKEN_2026";

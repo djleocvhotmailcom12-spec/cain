@@ -16,6 +16,9 @@ let faceMatcher = null;
 let recognizedUser = "VISITANTE";
 let labeledDescriptors = [];
 let modelsLoaded = false;
+let isEnrollingBiometrics = false;
+let enrollmentStep = ''; // 'FACE', 'NAME', 'VOICE'
+let tempFaceDescriptor = null;
 
 function updateIntelligence(stats) {
     if (!stats) return;
@@ -416,6 +419,18 @@ async function sendMessage() {
             learnFace("Leonardo");
         }
 
+        // Novo fluxo de biometria completa
+        if (message.toLowerCase().includes('ativar reconhecimento facial')) {
+            startBiometricEnrollment();
+            return;
+        }
+
+        // Se estiver em processo de captura de nome
+        if (isEnrollingBiometrics && enrollmentStep === 'NAME') {
+            handleNameCapture(message);
+            return;
+        }
+
     } catch (error) {
         console.log('Detectada falha de rede, tentando memória offline...');
         clearTimeout(searchTimeout);
@@ -784,3 +799,97 @@ window.addEventListener('appinstalled', (event) => {
     // Inicia sincronização imediata após instalação
     setTimeout(syncKnowledgeToLocal, 1000);
 });
+// Biometric Enrollment Flow (Face + Voice)
+async function startBiometricEnrollment() {
+    if (!modelsLoaded) return speak("Aguarde o sistema carregar completamente.", "pt-BR");
+    
+    isEnrollingBiometrics = true;
+    enrollmentStep = 'FACE';
+    
+    addMessage('cain', "[SISTEMA]: Iniciando captura biométrica completa.");
+    speak("Iniciando reconhecimento facial. Por favor, olhe para a câmera e fique imóvel.", "pt-BR");
+    
+    setTimeout(async () => {
+        const video = document.getElementById('video');
+        const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+        
+        if (detection) {
+            tempFaceDescriptor = Array.from(detection.descriptor);
+            enrollmentStep = 'NAME';
+            speak("Rosto capturado com sucesso. Agora, por favor, me diga qual é o seu nome?", "pt-BR");
+            addMessage('cain', "[SISTEMA]: Rosto capturado. Aguardando identificação por voz...");
+        } else {
+            speak("Não consegui detectar seu rosto. Vamos tentar novamente.", "pt-BR");
+            isEnrollingBiometrics = false;
+        }
+    }, 3000);
+}
+
+async function handleNameCapture(name) {
+    const cleanName = name.replace(/meu nome é|eu me chamo|sou o|sou a/gi, '').trim();
+    if (!cleanName) return speak("Não entendi o nome. Pode repetir?", "pt-BR");
+
+    enrollmentStep = 'VOICE';
+    speak(`Entendido, senhor ${cleanName}. Agora vou gravar uma amostra da sua voz para reconhecimento futuro. Fale qualquer coisa por três segundos.`, "pt-BR");
+    addMessage('cain', `[SISTEMA]: Gravando voz de ${cleanName}...`);
+    
+    const voiceData = await captureVoiceSample();
+    finalizeEnrollment(cleanName, tempFaceDescriptor, voiceData);
+}
+
+async function captureVoiceSample() {
+    return new Promise(async (resolve) => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mediaRecorder = new MediaRecorder(stream);
+            const chunks = [];
+
+            mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'audio/webm' });
+                const reader = new FileReader();
+                reader.readAsDataURL(blob);
+                reader.onloadend = () => resolve(reader.result);
+                stream.getTracks().forEach(track => track.stop());
+            };
+
+            mediaRecorder.start();
+            setTimeout(() => mediaRecorder.stop(), 4000); // 4 segundos de gravação
+        } catch (e) {
+            console.error("Erro ao gravar áudio:", e);
+            resolve(null);
+        }
+    });
+}
+
+async function finalizeEnrollment(name, descriptor, voiceData) {
+    const profile = {
+        name: name,
+        descriptor: descriptor,
+        voice: voiceData,
+        timestamp: Date.now()
+    };
+    
+    addMessage('cain', `[SISTEMA]: Sincronizando perfil de ${name}...`);
+    
+    // Salva no servidor
+    const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            message: `cain aprenda que bio_profile_${name.toLowerCase()} é ${JSON.stringify(profile)}` 
+        })
+    });
+    
+    if (res.ok) {
+        speak(`Perfil biométrico de ${name} salvo com sucesso. Eu te conheço agora, senhor.`, "pt-BR");
+        addMessage('cain', `[SISTEMA]: Biometria e voz de ${name} sincronizadas.`);
+        isEnrollingBiometrics = false;
+        enrollmentStep = '';
+        tempFaceDescriptor = null;
+        await loadBiometricProfiles();
+    } else {
+        speak("Houve um erro ao sincronizar seus dados biométricos.", "pt-BR");
+        isEnrollingBiometrics = false;
+    }
+}
