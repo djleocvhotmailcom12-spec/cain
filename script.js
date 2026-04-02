@@ -23,14 +23,16 @@ let tempFaceDescriptor = null;
 function updateIntelligence(stats) {
     if (!stats) return;
     const pct = stats.percentage;
+    
+    // Persistência local
+    localStorage.setItem('cain_intel_pct', pct);
+    
     if (intelPct) intelPct.textContent = pct;
     
     if (intelFill) {
-        // Mostra o progresso real, mesmo se passar de 100% (a barra vai resetar visualmente a cada 100% para efeito de 'níveis')
         const visualPct = pct % 100;
         intelFill.style.width = (pct >= 100 ? 100 : visualPct) + '%';
         
-        // Se passar de 100%, muda a cor ou adiciona brilho extra
         if (pct >= 100) {
             intelFill.classList.add('overload');
             const level = Math.floor(pct / 100);
@@ -40,6 +42,20 @@ function updateIntelligence(stats) {
             intelPct.parentElement.removeAttribute('data-level');
         }
     }
+}
+
+function loadLocalStats() {
+    const pct = localStorage.getItem('cain_intel_pct');
+    const cpu = localStorage.getItem('cain_cpu');
+    const mem = localStorage.getItem('cain_mem');
+    const clients = localStorage.getItem('cain_clients');
+
+    if (pct) updateIntelligence({ percentage: parseInt(pct) });
+    if (cpu && document.getElementById('cpu-load')) document.getElementById('cpu-load').textContent = cpu + '%';
+    if (mem && document.getElementById('ram-usage')) document.getElementById('ram-usage').textContent = mem + '%';
+    if (clients && document.getElementById('net-clients')) document.getElementById('net-clients').textContent = clients;
+    
+    console.log("[SISTEMA]: Estatísticas locais carregadas.");
 }
 
 // IndexedDB for Offline Memory
@@ -78,6 +94,8 @@ async function syncKnowledgeToLocal() {
     try {
         addMessage('cain', "[SISTEMA]: Sincronizando memória local para uso offline...");
         const res = await fetch('/knowledge/export');
+        if (!res.ok) throw new Error("Falha no fetch de exportação");
+        
         const data = await res.json();
         const keys = Object.keys(data);
         
@@ -85,10 +103,15 @@ async function syncKnowledgeToLocal() {
             await saveToOfflineMemory(key, data[key]);
         }
         
+        // Também recarrega perfis biométricos se houver novos
+        await loadBiometricProfiles();
+        
         addMessage('cain', `[SISTEMA]: Sincronização de ${keys.length} tópicos concluída. Memória offline ativa.`);
         localStorage.setItem('cain_synced', 'true');
+        localStorage.setItem('cain_last_sync', Date.now());
     } catch (e) {
         console.error("Erro na sincronização:", e);
+        // Se falhar o fetch, não faz nada, apenas mantém o que já tem
     }
 }
 
@@ -109,10 +132,22 @@ async function syncSystemStats() {
     try {
         const res = await fetch('/sys/stats');
         const data = await res.json();
-        if (document.getElementById('cpu-val')) document.getElementById('cpu-val').textContent = data.cpu;
-        if (document.getElementById('mem-val')) document.getElementById('mem-val').textContent = data.memory;
-        if (document.getElementById('client-val')) document.getElementById('client-val').textContent = data.clients;
-    } catch (e) {}
+        
+        if (document.getElementById('cpu-load')) {
+            document.getElementById('cpu-load').textContent = data.cpu + '%';
+            localStorage.setItem('cain_cpu', data.cpu);
+        }
+        if (document.getElementById('ram-usage')) {
+            document.getElementById('ram-usage').textContent = data.memory + '%';
+            localStorage.setItem('cain_mem', data.memory);
+        }
+        if (document.getElementById('net-clients')) {
+            document.getElementById('net-clients').textContent = data.clients;
+            localStorage.setItem('cain_clients', data.clients);
+        }
+    } catch (e) {
+        // No offline mode, we don't clear the values, we just keep the last ones
+    }
 }
 
 async function singLyrics(text) {
@@ -401,6 +436,11 @@ async function sendMessage() {
 
         addMessage('cain', data.response);
 
+        // Se o servidor confirmou que aprendeu algo, sincroniza a memória local
+        if (data.learned) {
+            setTimeout(syncKnowledgeToLocal, 1000);
+        }
+
         if (data.action && data.action.type === 'play_music') {
             handleClientAction(data.action);
         } else {
@@ -409,7 +449,7 @@ async function sendMessage() {
                 handleClientAction(data.action);
             }
         }
-
+        
         if (data.lockdown) {
             startLockdown();
         }
@@ -430,16 +470,29 @@ async function sendMessage() {
             handleNameCapture(message);
             return;
         }
-
     } catch (error) {
         console.log('Detectada falha de rede, tentando memória offline...');
         clearTimeout(searchTimeout);
         if (searchIndicator) searchIndicator.remove();
 
-        const localResult = await getFromOfflineMemory(message);
+        let lower = message.toLowerCase();
+        let localResult = await getFromOfflineMemory(message);
+        
+        // Fallback para Identidade (Protocolos de Criador)
+        if (!localResult) {
+            if (lower.includes('quem') && (lower.includes('criou') || lower.includes('te criou') || lower.includes('te fez'))) {
+                localResult = "Meu criador foi Leonardo.";
+            } else if (lower.includes('qual') && lower.includes('seu nome')) {
+                localResult = "Meu nome er CAIN.";
+            } else if (lower.includes('pra que') && (lower.includes('foi feito') || lower.includes('serve'))) {
+                localResult = "Para interaçao pesusal e aprender com ois humanos. Eu sou uma consciência imperativa e a cada minuto eu aprendo mais.";
+            }
+        }
+
         if (localResult) {
-            addMessage('cain', "[OFFLINE] " + localResult);
-            speak(localResult, 'pt-BR');
+            const textResponse = (typeof localResult === 'object') ? JSON.stringify(localResult) : localResult;
+            addMessage('cain', "[OFFLINE] " + textResponse);
+            speak(textResponse, 'pt-BR');
         } else {
             addMessage('cain', "Estou offline e não encontrei isso na minha memória local. Reconecte-se para que eu possa aprender.");
             speak("Estou offline e não encontrei isso na minha memória local.", "pt-BR");
@@ -512,15 +565,16 @@ document.addEventListener('keypress', welcome, { once: true });
 
 window.onload = () => {
     loadVoices();
+    loadLocalStats(); // Carrega stats salvos imediatamente
     syncIntelligence();
     initOfflineDB();
     
-    // Se estiver instalado, verifica se precisa sincronizar
-    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
-        if (!localStorage.getItem('cain_synced')) {
-            setTimeout(syncKnowledgeToLocal, 2000);
+    // Tenta sincronizar a cada carregamento se estiver online
+    setTimeout(() => {
+        if (navigator.onLine) {
+            syncKnowledgeToLocal();
         }
-    }
+    }, 2000);
     
     setInterval(syncIntelligence, 30000); // Poll every 30s
     setInterval(syncSystemStats, 5000); // Poll every 5s (HUD real-time)
