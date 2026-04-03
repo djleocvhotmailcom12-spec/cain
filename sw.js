@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cain-cache-v2';
+const CACHE_NAME = 'cain-cache-v3';
 const ASSETS = [
   '/',
   '/index.html',
@@ -25,12 +25,11 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
+          console.log('[SW]: Deletando cache antigo:', cacheName);
+          return caches.delete(cacheName);
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
 });
 

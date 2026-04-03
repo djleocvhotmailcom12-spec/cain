@@ -31,7 +31,9 @@ function updateIntelligence(stats) {
     
     if (intelFill) {
         const visualPct = pct % 100;
-        intelFill.style.width = (pct >= 100 ? 100 : visualPct) + '%';
+        // Se é múltiplo de 100 e maior que zero, a barra deve estar cheia (100%) antes de resetar
+        const barWidth = (visualPct === 0 && pct > 0) ? 100 : visualPct;
+        intelFill.style.width = barWidth + '%';
         
         if (pct >= 100) {
             intelFill.classList.add('overload');
@@ -54,6 +56,13 @@ function loadLocalStats() {
     if (cpu && document.getElementById('cpu-load')) document.getElementById('cpu-load').textContent = cpu + '%';
     if (mem && document.getElementById('ram-usage')) document.getElementById('ram-usage').textContent = mem + '%';
     if (clients && document.getElementById('net-clients')) document.getElementById('net-clients').textContent = clients;
+    
+    const syncPct = localStorage.getItem('cain_sync_pct');
+    if (syncPct && document.getElementById('sync-pct')) {
+        document.getElementById('sync-pct').textContent = syncPct + '%';
+        const syncBar = document.getElementById('sync-bar');
+        if (syncBar) syncBar.style.width = syncPct + "%";
+    }
     
     console.log("[SISTEMA]: Estatísticas locais carregadas.");
 }
@@ -92,15 +101,28 @@ async function getFromOfflineMemory(key) {
 
 async function syncKnowledgeToLocal() {
     try {
+        const syncLabel = document.getElementById('sync-pct');
+        if (syncLabel) syncLabel.textContent = "0%";
+        
         addMessage('cain', "[SISTEMA]: Sincronizando memória local para uso offline...");
         const res = await fetch('/knowledge/export');
         if (!res.ok) throw new Error("Falha no fetch de exportação");
         
         const data = await res.json();
         const keys = Object.keys(data);
+        const total = keys.length;
+        let count = 0;
         
         for (const key of keys) {
             await saveToOfflineMemory(key, data[key]);
+            count++;
+            if (syncLabel) {
+                const currentPct = Math.floor((count / total) * 100);
+                syncLabel.textContent = currentPct + "%";
+                const syncBar = document.getElementById('sync-bar');
+                if (syncBar) syncBar.style.width = currentPct + "%";
+                localStorage.setItem('cain_sync_pct', currentPct);
+            }
         }
         
         // Também recarrega perfis biométricos se houver novos
@@ -419,7 +441,7 @@ async function sendMessage() {
     }, 800);
 
     try {
-        const response = await fetch('/chat', {
+        const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message })
@@ -491,11 +513,12 @@ async function sendMessage() {
 
         if (localResult) {
             const textResponse = (typeof localResult === 'object') ? JSON.stringify(localResult) : localResult;
-            addMessage('cain', "[OFFLINE] " + textResponse);
+            addMessage('cain', "[MODO OFFLINE]: " + textResponse);
             speak(textResponse, 'pt-BR');
         } else {
-            addMessage('cain', "Estou offline e não encontrei isso na minha memória local. Reconecte-se para que eu possa aprender.");
-            speak("Estou offline e não encontrei isso na minha memória local.", "pt-BR");
+            const offlineMsg = "CONEXÃO COM SERVIDOR FALHOU: O CAIN não está conseguindo falar com o servidor local. Por favor, verifique se o terminal está rodando o CAIN e atualize a página.";
+            addMessage('cain', offlineMsg);
+            speak(offlineMsg, "pt-BR");
         }
     }
 }
@@ -638,7 +661,14 @@ async function detectFace() {
                         bioStatus.textContent = recognizedUser.toUpperCase();
                         bioStatus.classList.add('identified');
                     }
-                    speak(`Identificado: ${recognizedUser}. Bem-vindo, senhor.`, "pt-BR");
+                    const greetings = [
+                        `Identificado: ${recognizedUser}. É bom vê-lo novamente, senhor.`,
+                        `Reconhecimento concluído. Bem-vindo de volta, ${recognizedUser}.`,
+                        `Protocolos de identidade ativos. Olá, ${recognizedUser}. Como posso ser útil hoje?`,
+                        `${recognizedUser} detectado. Estou à sua disposição.`
+                    ];
+                    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+                    speak(greeting, "pt-BR");
                     addMessage('cain', `[BIO]: Usuário reconhecido: ${recognizedUser}.`);
                 }
             } else {

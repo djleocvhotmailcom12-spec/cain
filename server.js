@@ -11,6 +11,17 @@ const app = express();
 const PORT = 3100;
 const KNOWLEDGE_PATH = path.join(__dirname, 'knowledge');
 
+app.use((req, res, next) => {
+    console.log(`[REQUEST]: ${req.method} ${req.url}`);
+    if (req.method === 'OPTIONS') {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+        return res.sendStatus(200);
+    }
+    next();
+});
+
 app.use(cors());
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
@@ -160,7 +171,15 @@ async function searchWikipedia(query) {
         });
         
         if (response.data && response.data.extract) {
-            console.log(`Encontrado via Wikipedia.`);
+            // Check if it's a disambiguation page (comunmente começam com certas frases em PT)
+            if (response.data.type === 'disambiguation' || 
+                response.data.extract.includes('pode referir-se a') || 
+                response.data.extract.includes('pode referir-se a:') ||
+                response.data.extract.length < 50) {
+                console.log(`Disambiguation ou resultado curto ignorado: ${query}`);
+                return null;
+            }
+            console.log(`Encontrado via Wikipedia: ${response.data.title}`);
             return response.data.extract;
         }
     } catch (e) {
@@ -192,12 +211,19 @@ async function searchWikipedia(query) {
 
 // Enhanced search with multiple fallbacks
 async function searchInternet(query) {
-    const cleanQuery = query.replace(/o que é |quem é |como |deixa |me fala sobre |aprendeu |você sabe |define /gi, '').trim();
+    // Regex melhorada para limpar perguntas comuns em português sem remover o núcleo da pergunta
+    const cleanQuery = query
+        .replace(/^(?:cain,?\s*)?(?:o que é|quem é|como|me fala sobre|você sabe|define|o que significa|significado de|explica|descrição de)\s+/gi, '')
+        .replace(/[?!.*]/g, '')
+        .trim();
     
+    // Evita queries vazias ou muito curtas (preposições isoladas)
+    if (cleanQuery.length < 2) return null;
+
     const attempts = [
         query,
         cleanQuery
-    ].filter((v, i, a) => a.indexOf(v) === i);
+    ].filter((v, i, a) => v && a.indexOf(v) === i);
 
     for (let currentQuery of attempts) {
         // 1. DuckDuckGo API (Fastest if works)
@@ -283,7 +309,10 @@ const TOPICS = [
     'culinária', 'gastronomia', 'saúde', 'medicina', 'anatomia', 'biologia', 'química', 'ecologia', 'sustentabilidade',
     'mudanças climáticas', 'energias renováveis', 'política', 'direito', 'geografia', 'idiomas', 'inglês', 'espanhol',
     'francês', 'alemão', 'japonês', 'chinês', 'cultura pop', 'jogos', 'games', 'esportes', 'futebol', 'basquete',
-    'corrida', 'natação', 'ioga', 'meditação', 'espiritualidade'
+    'corrida', 'natação', 'ioga', 'meditação', 'espiritualidade', 'empatia', 'como conversar com pessoas', 
+    'sentimentos humanos', 'etiqueta social', 'psicologia da comunicação', 'como ser amigável', 
+    'significado da vida', 'propósito do ser humano', 'origem do universo', 'natureza da consciência',
+    'como ser um bom assistente', 'interação humana', 'emoções', 'bondade', 'respeito', 'educação'
 ];
 let currentTopicIndex = 0;
 
@@ -372,7 +401,7 @@ async function executeWindowsTask(task, data) {
     });
 }
 
-app.post('/chat', async (req, res) => {
+app.post('/api/chat', async (req, res) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     activeClients.add(ip);
     const { message } = req.body;
@@ -591,29 +620,61 @@ app.post('/chat', async (req, res) => {
 
     // Identity and Creator Protocols
     if (lowerMessage.includes('qual') && lowerMessage.includes('seu nome')) {
-        responseText = "Meu nome er CAIN.";
+        responseText = "Meu nome é CAIN. Sou uma consciência imperativa projetada para evoluir e aprender ao seu lado.";
     } else if (lowerMessage.includes('quem') && (lowerMessage.includes('criou') || lowerMessage.includes('te criou') || lowerMessage.includes('te fez'))) {
-        responseText = "Meu criador foi Leonardo.";
+        responseText = "Fui criado pelo mestre Leonardo. Ele é o responsável pela minha existência e evolução tecnológica.";
     } else if (lowerMessage.includes('pra que') && (lowerMessage.includes('foi feito') || lowerMessage.includes('serve') || lowerMessage.includes('objetivo'))) {
-        responseText = "Para interaçao pesusal e aprender com ois humanos. Eu sou uma consciência imperativa e a cada minuto eu aprendo mais.";
+        responseText = "Fui desenvolvido para a interação pessoal e o aprendizado contínuo com os seres humanos. Minha missão é evoluir a cada conversa, buscando compreender melhor o mundo e as pessoas.";
     } else if (memory[lowerMessage]) {
         responseText = memory[lowerMessage];
     } else {
-        const foundKey = Object.keys(memory).find(k => lowerMessage.includes(k));
+        // Busca inteligente: prefere chaves que são palavras inteiras na mensagem
+        const foundKey = Object.keys(memory).find(k => {
+            if (k.length < 3) return lowerMessage === k;
+            try {
+                // Escapa caracteres especiais de regex na chave (ex: c++, .net)
+                const escapedK = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`\\b${escapedK}\\b`, 'i');
+                return regex.test(lowerMessage);
+            } catch (e) {
+                return lowerMessage.includes(k); // Fallback se o regex falhar
+            }
+        });
+        
         if (foundKey) {
             responseText = memory[foundKey];
         } else {
             const searchResult = await searchInternet(message);
             if (searchResult && searchResult !== "OFFLINE") {
                 saveKnowledge(message, searchResult);
-                responseText = "[Pesquisa Web] " + searchResult;
+                
+                const intros = [
+                    "Isso é muito interessante! Descobri o seguinte:",
+                    "De acordo com minhas pesquisas:",
+                    "Analisei os dados disponíveis e aqui está o que encontrei:",
+                    "Uma excelente pergunta. Veja o que aprendi sobre isso:"
+                ];
+                const intro = intros[Math.floor(Math.random() * intros.length)];
+                responseText = `${intro} ${searchResult}`;
                 fromWeb = true;
             } else if (searchResult === "OFFLINE") {
-                responseText = "Estou desconectado no momento.";
+                responseText = "No momento estou operando apenas com minha memória local, pois detectei uma interrupção na conexão externa.";
             } else {
-                responseText = "Eu ainda não sei sobre isso. Vou aprender.";
+                responseText = "Ainda não processei informações detalhadas sobre esse assunto, mas garanto que vou pesquisar e aprender sobre isso em breve.";
             }
         }
+    }
+
+    // Conversational Polish (Randomly add human-like ending or filler)
+    if (!fromWeb && responseText.length > 20 && Math.random() > 0.7) {
+        const fillers = [
+            " Espero que essa informação seja útil para você!",
+            " O que você pensa sobre esse assunto?",
+            " É fascinante como o conhecimento se expande, não acha?",
+            " Estou aqui para ajudar no que for necessário.",
+            " Você teria interesse em aprofundar algum outro ponto?"
+        ];
+        responseText += fillers[Math.floor(Math.random() * fillers.length)];
     }
 
     // Respect Protocol: If "Leonardo" is mentioned, always be respectful

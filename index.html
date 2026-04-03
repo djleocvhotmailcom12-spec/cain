@@ -27,6 +27,11 @@
                 <div class="stat-row">CPU: <span id="cpu-load">0%</span></div>
                 <div class="stat-row">RAM: <span id="ram-usage">0%</span></div>
                 <div class="stat-row">NET: <span id="net-clients">1</span></div>
+                <div class="stat-row">
+                    <span>OFFLINE:</span>
+                    <div class="mini-progress"><div id="sync-bar" class="fill"></div></div>
+                    <span id="sync-pct">0%</span>
+                </div>
                 <div class="stat-row bio-stat">BIO: <span id="bio-status">OFFLINE</span></div>
             </div>
         </div>
@@ -102,7 +107,7 @@
     <video id="video" width="720" height="560" autoplay muted style="display: none;"></video>
     <canvas id="overlay" style="display: none;"></canvas>
 
-    <script src="script.js"></script>
+    <script src="script.js?v=3"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
