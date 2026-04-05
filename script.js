@@ -445,10 +445,16 @@ let _clientMap = null;
 async function initClientMap(focusTarget = null) {
     const hud = document.getElementById('map-full-hud'); if(!hud) return;
     hud.classList.remove('hidden');
-    if (!_clientMap) _clientMap = L.map('client-map-container').setView([-6.09, -46.14], 14);
+    if (!_clientMap) _clientMap = L.map('client-map-container', { maxZoom: 22 }).setView([-6.09, -46.14], 14);
     if (!window._satLayer) {
-        window._satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}').addTo(_clientMap);
-        window._labelLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}').addTo(_clientMap);
+        window._satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 22,
+            maxNativeZoom: 18
+        }).addTo(_clientMap);
+        window._labelLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 22,
+            maxNativeZoom: 18
+        }).addTo(_clientMap);
     }
     if (window._mapMarkers) window._mapMarkers.forEach(m => _clientMap.removeLayer(m));
     window._mapMarkers = [];
