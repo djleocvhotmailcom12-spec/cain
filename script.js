@@ -1407,11 +1407,14 @@ async function initClientMap() {
 
         markers.forEach(m => {
             // Usa CircleMarker para um visual mais "Radar/Sistema" (bolinha)
+            // Cor: Vermelho para Débito, Azul para Em Dia
+            const markerColor = m.hasDebt ? "#ff004c" : "#00f2ff";
+            
             const marker = L.circleMarker([m.lat, m.lng], {
-                radius: 8,
-                fillColor: "#ff004c", // Vermelho para destaque de débitos
+                radius: 7,
+                fillColor: markerColor,
                 color: "#fff",
-                weight: 2,
+                weight: 1.5,
                 opacity: 1,
                 fillOpacity: 0.8
             }).addTo(_clientMap);
@@ -1425,15 +1428,16 @@ async function initClientMap() {
             });
 
             // Popup com detalhes ao clicar (NOME + ENDEREÇO + DÉBITO)
+            const popupHeaderColor = m.hasDebt ? "#ff004c" : "#00f2ff";
             marker.bindPopup(`
-                <div style="font-family: Orbitron, sans-serif; color: #00f2ff; min-width: 200px;">
-                    <b style="font-size: 14px; display: block; border-bottom: 1px solid #00f2ff; margin-bottom: 5px; padding-bottom: 2px;">${m.name}</b>
+                <div style="font-family: Orbitron, sans-serif; color: ${popupHeaderColor}; min-width: 200px;">
+                    <b style="font-size: 14px; display: block; border-bottom: 2px solid ${popupHeaderColor}; margin-bottom: 5px; padding-bottom: 2px;">${m.name}</b>
                     <div style="color: #fff; font-size: 11px; margin-bottom: 8px;">
                         📍 <b>Endereço:</b><br>${m.address || 'Não informado'}
                     </div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,0,76,0.1); padding: 5px; border-radius: 4px;">
-                        <span style="color: #aaa; font-size: 10px;">DÉBITO TOTAL:</span>
-                        <span style="color: #ff004c; font-weight: bold; font-size: 15px;">${m.debt}</span>
+                    <div style="display: flex; justify-content: space-between; align-items: center; background: ${m.hasDebt ? 'rgba(255,0,76,0.1)' : 'rgba(0,242,255,0.05)'}; padding: 5px; border-radius: 4px; border: 1px solid ${m.hasDebt ? 'rgba(255,0,76,0.3)' : 'rgba(0,242,255,0.2)'};">
+                        <span style="color: #aaa; font-size: 10px;">DÉBITO:</span>
+                        <span style="color: ${popupHeaderColor}; font-weight: bold; font-size: 15px;">${m.debt}</span>
                     </div>
                 </div>
             `);

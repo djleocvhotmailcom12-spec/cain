@@ -936,14 +936,19 @@ app.get('/api/map/clients', async (req, res) => {
         // Mapeia IDs de clientes que tem boleto em aberto
         const clientIdsWithDebt = new Set(openBillings.map(b => b.customer_id));
         
-        // Filtra clientes que tem coordenadas E tem boleto em aberto (ou todos se preferir, mas o user pediu "que tem boletos")
+        // Filtra TODOS os clientes que tem coordenadas (Latitude e Longitude)
         const markers = allClients
-            .filter(c => c.latitude && c.longitude && clientIdsWithDebt.has(c.id))
+            .filter(c => c.latitude && c.longitude)
             .map(c => {
-                // Calcula total de dÃ©bito para esse cliente nesta lista
-                const clientDebt = openBillings
-                    .filter(b => b.customer_id === c.id)
-                    .reduce((sum, b) => sum + parseFloat(b.value || 0), 0);
+                const hasDebt = clientIdsWithDebt.has(c.id);
+                
+                // Calcula total de dÃ©bito apenas se tiver dÃ©bito
+                let clientDebt = 0;
+                if (hasDebt) {
+                    clientDebt = openBillings
+                        .filter(b => b.customer_id === c.id)
+                        .reduce((sum, b) => sum + parseFloat(b.value || 0), 0);
+                }
 
                 return {
                     id: c.id,
@@ -951,8 +956,9 @@ app.get('/api/map/clients', async (req, res) => {
                     lat: parseFloat(c.latitude),
                     lng: parseFloat(c.longitude),
                     status: c.status || 'Ativo',
+                    hasDebt: hasDebt,
                     address: `${c.street || ''}, ${c.number || ''} - ${c.neighborhood || ''}, ${c.city || ''} - ${c.state || ''}`.replace(/,\s*,/g, ',').trim(),
-                    debt: clientDebt.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                    debt: clientDebt > 0 ? clientDebt.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'R$ 0,00'
                 };
             });
 
