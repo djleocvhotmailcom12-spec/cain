@@ -449,11 +449,11 @@ async function initClientMap(focusTarget = null) {
     if (!window._satLayer) {
         window._satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
             maxZoom: 22,
-            maxNativeZoom: 18
+            maxNativeZoom: 17
         }).addTo(_clientMap);
         window._labelLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
             maxZoom: 22,
-            maxNativeZoom: 18
+            maxNativeZoom: 17
         }).addTo(_clientMap);
     }
     if (window._mapMarkers) window._mapMarkers.forEach(m => _clientMap.removeLayer(m));
