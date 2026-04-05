@@ -462,9 +462,16 @@ if (recognition) {
         // ─── VERIFICAÇÃO DE VOZ: saudação por nome ou rejeição ───────────────
         // Só ativa quando o microfone permanente está ligado (alwaysListen)
         if (alwaysListen && _voiceProfiles && _voiceProfiles.length > 0) {
-            const match = matchVoiceProfile(transcript);
+            let match = matchVoiceProfile(transcript);
+            
+            // Se NÃO encontrou o nome na fala, tenta a biometria facial (Face API)
+            // Isso permite que o CAIN "saiba" quem está falando pelo rosto
+            if (!match && recognizedUser && recognizedUser !== "VISITANTE") {
+                match = _voiceProfiles.find(p => p.name.toLowerCase() === recognizedUser.toLowerCase());
+            }
+
             if (match) {
-                // Voz reconhecida: saudar pelo nome e atualizar perfil ativo
+                // Usuário identificado (por voz ou face): saudar pelo nome
                 currentUser = match.profile;
                 const greet = 'SIM ' + match.name.toUpperCase();
                 addMessage('cain', greet);
@@ -473,7 +480,7 @@ if (recognition) {
                 if (ud) ud.textContent = currentUser;
                 // Deixa continuar para enviar a mensagem ao servidor normalmente
             } else {
-                // Voz NÃO cadastrada: rejeitar e descartar a pergunta
+                // Pessoa desconhecida (nem nome na fala, nem rosto reconhecido)
                 const reject = 'VOCÊ NÃO TEM AUTORIZAÇÃO';
                 addMessage('cain', reject);
                 speak(reject);
@@ -1315,21 +1322,18 @@ async function saveVoiceProfile(name, profile) {
     } catch(e) { console.error('[VOZ] Erro ao salvar:', e); return false; }
 }
 
-// Verifica se o texto reconhecido pertence a um perfil cadastrado
-// Retorna { name, profile } ou null
+// Verifica se o texto reconhecido pertence a um perfil cadastrado (pelo nome na fala)
 function matchVoiceProfile(text) {
     if (!_voiceProfiles.length) return null;
     const norm = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
     const transcriptNorm = norm(text);
-    const transcriptWords = transcriptNorm.split(/\s+/);
+    
     for (const p of _voiceProfiles) {
         const nameNorm = norm(p.name);
-        const nameWords = nameNorm.split(/\s+/).filter(w => w.length >= 3);
-        // Cada palavra do nome deve aparecer como palavra exata no transcript
-        const allMatch = nameWords.length > 0 && nameWords.every(nw =>
-            transcriptWords.some(tw => tw === nw)
-        );
-        if (allMatch) return p;
+        if (!nameNorm) continue;
+        // Verifica se o nome aparece como uma palavra exata no transcript
+        const regex = new RegExp('\\b' + nameNorm + '\\b', 'i');
+        if (regex.test(transcriptNorm)) return p;
     }
     return null;
 }
