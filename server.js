@@ -1,4 +1,4 @@
-﻿// --- CONFIGURAÃ‡ÃƒO MIKWEB ---
+// --- CONFIGURAÃ‡ÃƒO MIKWEB ---
 const MIKWEB_TOKEN = '18GNZ2Z333:JGBVZDFFRMN2WOTCEKQPXWQKFGYYTZMT';
 const MIKWEB_BASE = 'https://api.mikweb.com.br/v1/admin';
 
@@ -921,8 +921,48 @@ app.get('/uploads/proxy', async (req, res) => {
     } catch(e) { res.status(500).send('Erro ao buscar arquivo: ' + e.message); }
 });
 
+app.get('/api/map/clients', async (req, res) => {
+    try {
+        console.log('[MAP] Requisitando dados de mapeamento de clientes...');
+        const allClients = await getAllMikwebClients();
+        
+        // Busca faturas em aberto para saber quem mapear (limitado a 200 para performance)
+        const billingsRes = await mikwebRequest('/billings?limit=200');
+        const billings = (billingsRes && billingsRes.billings) ? billingsRes.billings : [];
+        
+        // Filtra apenas faturas em 'Aberto'
+        const openBillings = billings.filter(b => b.situation && b.situation.name === 'Aberto');
+        
+        // Mapeia IDs de clientes que tem boleto em aberto
+        const clientIdsWithDebt = new Set(openBillings.map(b => b.customer_id));
+        
+        // Filtra clientes que tem coordenadas E tem boleto em aberto (ou todos se preferir, mas o user pediu "que tem boletos")
+        const markers = allClients
+            .filter(c => c.latitude && c.longitude && clientIdsWithDebt.has(c.id))
+            .map(c => {
+                // Calcula total de dÃ©bito para esse cliente nesta lista
+                const clientDebt = openBillings
+                    .filter(b => b.customer_id === c.id)
+                    .reduce((sum, b) => sum + parseFloat(b.value || 0), 0);
 
-// PERFIS DE VOZ - persistentes, nunca apagados
+                return {
+                    id: c.id,
+                    name: c.full_name,
+                    lat: parseFloat(c.latitude),
+                    lng: parseFloat(c.longitude),
+                    status: c.status || 'Ativo',
+                    debt: clientDebt.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                };
+            });
+
+        console.log(`[MAP] ${markers.length} marcadores gerados.`);
+        res.json({ markers });
+    } catch (e) {
+        console.error('[MAP-ERROR]', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 const VOICE_PROFILES_FILE = require('path').join(__dirname, 'voice_profiles.json');
 function loadVoiceProfiles() {
     try { if (require('fs').existsSync(VOICE_PROFILES_FILE)) return JSON.parse(require('fs').readFileSync(VOICE_PROFILES_FILE,'utf8')); } catch(e){}

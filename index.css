@@ -1043,3 +1043,92 @@ main {
     from { transform: translateX(-20px); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
 }
+
+/* HUD de Mapa FullScreen */
+#map-full-hud {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: rgba(0, 8, 15, 0.95);
+    backdrop-filter: blur(10px);
+    z-index: 5000;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    animation: fadeIn 0.4s ease;
+}
+
+#map-full-hud .hud-header {
+    font-size: 1.2rem;
+    text-align: center;
+    margin-bottom: 15px;
+    color: var(--primary-color);
+    text-shadow: 0 0 10px var(--primary-color);
+    border-bottom: 2px solid var(--primary-color);
+}
+
+#client-map-container {
+    flex: 1;
+    border: 2px solid var(--primary-color);
+    box-shadow: 0 0 30px rgba(0, 242, 255, 0.2);
+    border-radius: 10px;
+    background: #000;
+}
+
+.map-controls {
+    display: flex;
+    justify-content: center;
+    padding: 15px 0;
+}
+
+.map-controls button {
+    background: var(--neon-red);
+    color: white;
+    border: none;
+    padding: 12px 30px;
+    border-radius: 8px;
+    font-family: 'Orbitron', sans-serif;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 0 15px var(--neon-red);
+    transition: 0.3s;
+}
+
+.map-controls button:hover {
+    transform: scale(1.05);
+    background: #fff;
+    color: var(--neon-red);
+}
+
+/* Customização do Leaflet para o tema CAIN */
+.leaflet-container {
+    background: #000 !important;
+}
+
+.leaflet-popup-content-wrapper {
+    background: rgba(10, 20, 30, 0.9) !important;
+    color: #fff !important;
+    border: 1px solid var(--primary-color) !important;
+    border-radius: 4px !important;
+}
+
+.leaflet-popup-tip {
+    background: var(--primary-color) !important;
+}
+
+/* Nome do cliente flutuando (Tooltip Permanente) */
+.client-label {
+    background: rgba(0, 242, 255, 0.1) !important;
+    border: 1px solid var(--primary-color) !important;
+    color: var(--primary-color) !important;
+    font-family: 'Orbitron', sans-serif !important;
+    font-weight: bold !important;
+    font-size: 10px !important;
+    text-shadow: 0 0 5px #000 !important;
+    padding: 2px 5px !important;
+    box-shadow: none !important;
+}
+
+.client-label::before {
+    display: none !important;
+}

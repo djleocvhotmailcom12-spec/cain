@@ -575,6 +575,16 @@ async function sendMessage() {
         return;
     }
 
+    // ─── COMANDO: MAPEAR CLIENTES ──────────────────────────────────────────
+    if ((lowerMsg.includes('mapear') || lowerMsg.includes('mapa')) && lowerMsg.includes('cliente')) {
+        userInput.value = '';
+        addMessage('user', message);
+        addMessage('cain', 'Sim senhor. Iniciando rastreamento geográfico e mapeamento de clientes com boletos em aberto.');
+        speak('Sim senhor. Iniciando mapeamento de clientes.');
+        initClientMap();
+        return;
+    }
+
     // ─── COMANDO: ATIVAR RECONHECIMENTO FACIAL ───────────────────────────────
     const bioKeys = ['ativar reconhecimento', 'reconhecimento facial', 'cadastrar rosto', 'aprender rosto', 'cadastrar biometria'];
     const bioKey = bioKeys.find(k => lowerMsg.startsWith(k));
@@ -1361,4 +1371,76 @@ async function processVoiceRegName(name) {
         speak('Erro ao salvar.');
     }
     return true;
+}
+
+// --- SISTEMA DE MAPEAMENTO GLOBAL ---
+let _clientMap = null;
+async function initClientMap() {
+    const mapHud = document.getElementById('map-full-hud');
+    if (!mapHud) return;
+    mapHud.classList.remove('hidden');
+
+    // Inicializa o Leaflet se ainda não existir
+    if (!_clientMap) {
+        // Coordenadas iniciais: Grajaú-MA (centro médio dos clientes)
+        _clientMap = L.map('client-map-container').setView([-6.09, -46.14], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(_clientMap);
+    }
+
+    // Limpa marcadores anteriores (se houver camada de grupo)
+    if (window._mapMarkers) {
+        window._mapMarkers.forEach(m => _clientMap.removeLayer(m));
+    }
+    window._mapMarkers = [];
+
+    try {
+        const response = await fetch('/api/map/clients');
+        const data = await response.json();
+        const markers = data.markers || [];
+
+        if (markers.length === 0) {
+            addMessage('cain', 'Nenhum cliente com boleto em aberto e coordenadas válidas foi encontrado para mapear.');
+            return;
+        }
+
+        markers.forEach(m => {
+            const marker = L.marker([m.lat, m.lng], {
+                title: m.name
+            }).addTo(_clientMap);
+
+            // Adiciona o nome do cliente como uma label permanente
+            marker.bindTooltip(m.name, {
+                permanent: true,
+                direction: 'right',
+                className: 'client-label'
+            });
+
+            // Popup com detalhes ao clicar
+            marker.bindPopup(`
+                <div style="font-family: Orbitron, sans-serif; color: #00f2ff;">
+                    <b style="font-size: 14px;">${m.name}</b><br>
+                    <hr style="border: 0; border-top: 1px solid rgba(0,242,255,0.2); margin: 5px 0;">
+                    <span style="color: #fff; font-size: 12px;">Status: ${m.status}</span><br>
+                    <span style="color: #ff004c; font-weight: bold; font-size: 14px;">Débito: ${m.debt}</span>
+                </div>
+            `);
+
+            window._mapMarkers.push(marker);
+        });
+
+        // Ajusta o zoom para mostrar todos os marcadores
+        if (window._mapMarkers.length > 0) {
+            const group = new L.featureGroup(window._mapMarkers);
+            _clientMap.fitBounds(group.getBounds().pad(0.2));
+        }
+
+        addMessage('cain', `Mapeamento concluído. ${markers.length} clientes localizados com sucesso.`);
+        speak(`${markers.length} clientes localizados.`);
+
+    } catch (e) {
+        console.error('[MAP-JS-ERROR]', e);
+        addMessage('cain', 'Erro ao carregar dados do mapa.');
+    }
 }

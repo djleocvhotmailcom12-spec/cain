@@ -12,7 +12,9 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="apple-touch-icon" href="cain_face.png">
     <link rel="manifest" href="manifest.json">
-    <!-- Biometrics: face-api.js - DEVE carregar antes do script.js -->
+    <!-- Leaflet.js (Mapas) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 </head>
 <body>
@@ -101,6 +103,15 @@
                 <button id="install-accept-btn">BAIXAR AGORA</button>
                 <button id="install-close-btn">MAIS TARDE</button>
             </div>
+        </div>
+    </div>
+
+    <!-- HUD de Mapa FullScreen -->
+    <div id="map-full-hud" class="hidden">
+        <div class="hud-header">MAPIAMENTO GLOBAL DE CLIENTES - MIDNET</div>
+        <div id="client-map-container"></div>
+        <div class="map-controls">
+            <button onclick="document.getElementById('map-full-hud').classList.add('hidden')" class="close-hud">FECHAR MAPA</button>
         </div>
     </div>
 
