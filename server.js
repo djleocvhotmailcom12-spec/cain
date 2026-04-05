@@ -951,6 +951,7 @@ app.get('/api/map/clients', async (req, res) => {
                     lat: parseFloat(c.latitude),
                     lng: parseFloat(c.longitude),
                     status: c.status || 'Ativo',
+                    address: `${c.street || ''}, ${c.number || ''} - ${c.neighborhood || ''}, ${c.city || ''} - ${c.state || ''}`.replace(/,\s*,/g, ',').trim(),
                     debt: clientDebt.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
                 };
             });

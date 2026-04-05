@@ -1406,24 +1406,35 @@ async function initClientMap() {
         }
 
         markers.forEach(m => {
-            const marker = L.marker([m.lat, m.lng], {
-                title: m.name
+            // Usa CircleMarker para um visual mais "Radar/Sistema" (bolinha)
+            const marker = L.circleMarker([m.lat, m.lng], {
+                radius: 8,
+                fillColor: "#ff004c", // Vermelho para destaque de débitos
+                color: "#fff",
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.8
             }).addTo(_clientMap);
 
             // Adiciona o nome do cliente como uma label permanente
             marker.bindTooltip(m.name, {
                 permanent: true,
-                direction: 'right',
+                direction: 'top',
+                offset: [0, -10],
                 className: 'client-label'
             });
 
-            // Popup com detalhes ao clicar
+            // Popup com detalhes ao clicar (NOME + ENDEREÇO + DÉBITO)
             marker.bindPopup(`
-                <div style="font-family: Orbitron, sans-serif; color: #00f2ff;">
-                    <b style="font-size: 14px;">${m.name}</b><br>
-                    <hr style="border: 0; border-top: 1px solid rgba(0,242,255,0.2); margin: 5px 0;">
-                    <span style="color: #fff; font-size: 12px;">Status: ${m.status}</span><br>
-                    <span style="color: #ff004c; font-weight: bold; font-size: 14px;">Débito: ${m.debt}</span>
+                <div style="font-family: Orbitron, sans-serif; color: #00f2ff; min-width: 200px;">
+                    <b style="font-size: 14px; display: block; border-bottom: 1px solid #00f2ff; margin-bottom: 5px; padding-bottom: 2px;">${m.name}</b>
+                    <div style="color: #fff; font-size: 11px; margin-bottom: 8px;">
+                        📍 <b>Endereço:</b><br>${m.address || 'Não informado'}
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,0,76,0.1); padding: 5px; border-radius: 4px;">
+                        <span style="color: #aaa; font-size: 10px;">DÉBITO TOTAL:</span>
+                        <span style="color: #ff004c; font-weight: bold; font-size: 15px;">${m.debt}</span>
+                    </div>
                 </div>
             `);
 
