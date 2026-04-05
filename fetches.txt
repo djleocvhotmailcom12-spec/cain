@@ -1,0 +1,18 @@
+function updateIntelligence(stats) {
+    if (pct) updateIntelligence({ percentage: parseInt(pct) });
+        const res = await fetch('/knowledge/export');
+        if (!res.ok) throw new Error("Falha no fetch de exportação");
+        // Se falhar o fetch, não faz nada, apenas mantém o que já tem
+        const res = await fetch('/stats');
+        updateIntelligence(data);
+        const res = await fetch('/sys/stats');
+        const response = await fetch('/api/chat', {
+            updateIntelligence(data.intelligence);
+        const res = await fetch('/knowledge/export');
+        const res = await fetch('/chat', {
+        await fetch('/lockdown/wipe', { method: 'POST' });
+    const res = await fetch('/chat', {
+window.fetchHistorySAC = async function() {\n
+        const req = await fetch('/api/chat/history?user=' + encodeURIComponent(currentUser));
+window.fetchRecentSAC = async function() {\n
+        const req = await fetch('/api/chat/recent?user=' + encodeURIComponent(currentUser));

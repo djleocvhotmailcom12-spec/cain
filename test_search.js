@@ -1,44 +1,46 @@
 const axios = require('axios');
 
-async function testSearch(query) {
-    console.log(`\nTestando pesquisa para: ${query}`);
+async function searchMikWebLive(query) {
+    const lowerQuery = query.toLowerCase();
+    const stopWords = ['quem', 'é', 'o', 'a', 'os', 'as', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas', 'de', 'para', 'com', 'onde', 'está', 'esta', 'me', 'mostre', 'verifique', 'procure', 'buscar'];
+    const keywords = lowerQuery.split(/\s+/).filter(w => w.length > 2 && !stopWords.includes(w));
     
-    // Test Wikipedia
-    try {
-        console.log(`Tentativa Wikipedia...`);
-        const lang = query.match(/[áéíóúãõç]/i) ? 'pt' : 'en';
-        const endpoint = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query.replace(/ /g, '_'))}`;
-        const res = await axios.get(endpoint, { 
-            headers: { 'User-Agent': 'CAIN-Assistant/1.0 (Contact: leonardo@example.com)' },
-            timeout: 8000 
-        });
-        if (res.data && res.data.extract) {
-            console.log(`SUCESSO Wikipedia: ${res.data.extract.substring(0, 100)}...`);
-        }
-    } catch (e) {
-        console.log(`FALHA Wikipedia: ${e.message}`);
-    }
+    if (keywords.length === 0 && lowerQuery.length > 3) keywords.push(lowerQuery);
+    if (keywords.length === 0) return null;
 
-    // Test DuckDuckGo
+    console.log("KEYWORDS:", keywords);
+
+    const TOKEN = "18GNZ2Z333:JGBVZDFFRMN2WOTCEKQPXWQKFGYYTZMT"; 
+    const BASE = "https://api.mikweb.com.br/v1/admin/";
+    const results = [];
+    
     try {
-        console.log(`Tentativa DuckDuckGo HTML...`);
-        const htmlResponse = await axios.get(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-            headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-            },
-            timeout: 10000
+        const resClientes = await axios.get(BASE + "customers?pagination=false", {
+            headers: { 'Authorization': `Bearer ${TOKEN}`, 'Accept': 'application/json' },
+            timeout: 5000
+        });
+        const clientData = resClientes.data?.customers || [];
+        console.log("CLIENT DATA LENGTH:", clientData.length);
+        const foundClients = clientData.filter(c => {
+            const name = (c.full_name || "").toLowerCase();
+            const cpf = c.cpf_cnpj || "";
+            const login = (c.login || "").toLowerCase();
+            return keywords.some(k => name.includes(k) || cpf.includes(k) || login.includes(k));
         });
         
-        const match = htmlResponse.data.match(/class="result__snippet"[^>]*>(.*?)<\/a>/i);
-        if (match && match[1]) {
-            console.log(`SUCESSO DDG: ${match[1].substring(0, 100)}...`);
-        } else {
-            console.log('FALHA DDG: Snippet não encontrado.');
+        console.log("FOUND CLIENTS:", foundClients.length);
+        
+        if (foundClients.length > 0) {
+            foundClients.slice(0, 20).forEach(c => {
+                results.push(`👤 *NOME:* ${c.full_name}\n`);
+            });
+            if (foundClients.length > 20) results.push(`... (+${foundClients.length - 20} encontrados)\n`);
         }
-    } catch (error) {
-        console.log(`ERRO DDG: ${error.message}`);
+    } catch (e) {
+        console.error("Live MikWeb Customers Error:", e.response ? e.response.statusText : e.message);
     }
+    
+    console.log("FINAL RESULTS:", results.length > 0 ? results.join('\n') : null);
 }
 
-testSearch('O que é o sol?');
-testSearch('tecnologia');
+searchMikWebLive("pesquise maria");

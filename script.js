@@ -19,6 +19,8 @@ let modelsLoaded = false;
 let isEnrollingBiometrics = false;
 let enrollmentStep = ''; // 'FACE', 'NAME', 'VOICE'
 let tempFaceDescriptor = null;
+let isAuthenticated = false;
+let currentUser = null;
 
 function updateIntelligence(stats) {
     if (!stats) return;
@@ -269,6 +271,24 @@ function handleClientAction(action) {
                 downloadNote(action.data);
                 autoSuccess = true;
                 break;
+            case 'whatsapp_sync':
+                if (Array.isArray(action.data)) {
+                    action.data.forEach(msg => {
+                        renderSACMessage({
+                            isSac: true,
+                            senderName: msg.from,
+                            textContent: msg.text,
+                            fileType: msg.fileType,
+                            fileUrl: msg.file ? `http://181.224.24.70:3100/${msg.file}` : null
+                        });
+                    });
+                }
+                autoSuccess = true;
+                break;
+            case 'media_sequence':
+                handleMediaSequence(action);
+                autoSuccess = true;
+                break;
         }
     } catch (e) {
         autoSuccess = false;
@@ -298,6 +318,66 @@ function downloadNote(text) {
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
 }
+
+// ─── MEDIA SEQUENCE HANDLER ────────────────────────────────────────────────────
+let _pendingConfirmation = null;
+
+function waitForConfirmation(label, callback) {
+    _pendingConfirmation = { label, callback };
+}
+
+function playAudioAndWait(url) {
+    return new Promise(resolve => {
+        const audio = new Audio(url);
+        audio.onended = resolve;
+        audio.onerror = resolve;
+        audio.play().catch(resolve);
+    });
+}
+
+async function handleMediaSequence(action) {
+    const { mediaType, items, clientName } = action;
+    const BASE = 'http://181.224.24.70:3100/';
+    if (!items || !items.length) return;
+
+    if (mediaType === 'audio') {
+        items.forEach((item, i) => {
+            renderSACMessage({ isSac: true, senderName: item.from, textContent: `Audio ${i+1}`, fileType: 'audio', fileUrl: BASE + item.file });
+        });
+        const msg = `${items.length} audio(s) de ${clientName}. Quer ouvir? Diga SIM.`;
+        addMessage('cain', msg); speak(msg);
+        waitForConfirmation('audio', async () => {
+            for (let i = 0; i < items.length; i++) {
+                const txt = `Tocando audio ${i+1} de ${items.length}`;
+                addMessage('cain', txt); speak(txt);
+                await playAudioAndWait(BASE + items[i].file);
+            }
+            addMessage('cain', 'Todos os audios foram reproduzidos.');
+            speak('Todos os áudios foram reproduzidos.');
+        });
+
+    } else if (mediaType === 'photo') {
+        items.forEach((item, i) => {
+            renderSACMessage({ isSac: true, senderName: item.from, textContent: `Imagem ${i+1}`, fileType: 'photo', fileUrl: BASE + item.file });
+        });
+        const msg = `${items.length} imagem(ns) de ${clientName}. Quer abrir? Diga SIM.`;
+        addMessage('cain', msg); speak(msg);
+        waitForConfirmation('photo', () => {
+            items.forEach(item => window.open(BASE + item.file, '_blank'));
+        });
+
+    } else if (mediaType === 'document') {
+        items.forEach((item, i) => {
+            renderSACMessage({ isSac: true, senderName: item.from, textContent: `PDF ${i+1}: ${item.fileName}`, fileType: 'document', fileUrl: BASE + item.file });
+        });
+        const msg = `${items.length} PDF(s) de ${clientName}. Quer abrir no navegador? Diga SIM.`;
+        addMessage('cain', msg); speak(msg);
+        waitForConfirmation('pdf', () => {
+            items.forEach(item => window.open(BASE + item.file, '_blank'));
+        });
+    }
+}
+
 
 // Web Speech API
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -368,13 +448,32 @@ if (recognition) {
         voiceBtn.classList.add('listening');
     };
 
-    recognition.onresult = (event) => {
+    recognition.onresult = async (event) => {
         const last = event.results.length - 1;
         const transcript = event.results[last][0].transcript.trim();
-        if (transcript) {
-            userInput.value = transcript;
-            sendMessage();
+        if (!transcript) return;
+
+        // Se estiver em fluxo de cadastro de voz, captura o nome falado
+        if (_voiceRegFlow) {
+            await processVoiceRegName(transcript);
+            return;
         }
+
+        // Reconhecimento automatico de perfil por voz
+        if (_voiceProfiles && _voiceProfiles.length > 0) {
+            const match = matchVoiceProfile(transcript);
+            if (match && match.profile !== currentUser) {
+                currentUser = match.profile;
+                addMessage('cain', 'Voz de ' + match.name + ' reconhecida. Perfil ' + match.profile + ' ativado.');
+                speak('Ola ' + match.name + '.');
+                const ud = document.getElementById('current-user-display');
+                if (ud) ud.textContent = currentUser;
+                return;
+            }
+        }
+
+        userInput.value = transcript;
+        sendMessage();
     };
 
     recognition.onerror = (event) => {
@@ -428,6 +527,56 @@ async function sendMessage() {
         return;
     }
 
+    // Intercepta SIM/NÃO para confirmações de mídia pendentes
+    if (_pendingConfirmation) {
+        const lower = message.toLowerCase().trim();
+        if (lower === 'sim' || lower === 's') {
+            addMessage('user', message);
+            userInput.value = '';
+            const cb = _pendingConfirmation.callback;
+            _pendingConfirmation = null;
+            addMessage('cain', 'Certo, executando...');
+            speak('Certo.');
+            cb();
+            return;
+        } else if (lower === 'não' || lower === 'nao' || lower === 'n') {
+            addMessage('user', message);
+            userInput.value = '';
+            _pendingConfirmation = null;
+            addMessage('cain', 'Cancelado.');
+            speak('Cancelado.');
+            return;
+        }
+    }
+
+    // ─── COMANDO: ATIVAR RECONHECIMENTO DE VOZ ───────────────────────────────
+    const lowerMsg = message.toLowerCase();
+    const voiceRegKeys = ['ativar reconhecimento de voz', 'cadastrar voz', 'reconhecimento de voz', 'aprender minha voz'];
+    if (voiceRegKeys.some(k => lowerMsg.includes(k))) {
+        userInput.value = '';
+        addMessage('user', message);
+        await startVoiceRegistration();
+        return;
+    }
+
+    // ─── COMANDO: ATIVAR RECONHECIMENTO FACIAL ───────────────────────────────
+    const bioKeys = ['ativar reconhecimento', 'reconhecimento facial', 'cadastrar rosto', 'aprender rosto', 'cadastrar biometria'];
+    const bioKey = bioKeys.find(k => lowerMsg.startsWith(k));
+    if (bioKey) {
+        userInput.value = '';
+        const nome = message.slice(bioKey.length).trim() || 'Usuario';
+        addMessage('user', message);
+        if (typeof faceapi === 'undefined' || !modelsLoaded) {
+            addMessage('cain', 'Sistema de biometria ainda carregando. Aguarde alguns segundos e tente novamente.');
+            speak('Sistema de biometria carregando, aguarde.');
+        } else {
+            addMessage('cain', `Iniciando captura biometrica para ${nome}. Olhe para a camera.`);
+            speak(`Iniciando captura biometrica. Olhe para a camera, ${nome}.`);
+            learnFace(nome);
+        }
+        return;
+    }
+
     addMessage('user', message);
     userInput.value = '';
 
@@ -444,7 +593,7 @@ async function sendMessage() {
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message })
+            body: JSON.stringify({ message, user: currentUser || 'VISITANTE' })
         });
 
         clearTimeout(searchTimeout);
@@ -604,11 +753,26 @@ window.onload = () => {
     
     // Inicia Biometria
     initBiometrics();
+
+    // Carrega perfis de voz cadastrados (memoria permanente)
+    loadVoiceProfiles();
 };
 
 // Biometric Integration (face-api.js)
 async function initBiometrics() {
     if (bioStatus) bioStatus.textContent = "CARREGANDO...";
+    
+    // Aguarda a face-api estar disponivel (CDN pode demorar)
+    let tries = 0;
+    while (typeof faceapi === 'undefined' && tries < 20) {
+        await new Promise(r => setTimeout(r, 500));
+        tries++;
+    }
+    if (typeof faceapi === 'undefined') {
+        console.warn("face-api.js nao carregou. Biometria desativada.");
+        if (bioStatus) bioStatus.textContent = "OFFLINE";
+        return;
+    }
     
     try {
         const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
@@ -726,7 +890,7 @@ async function learnFace(name = "Leonardo") {
         };
         
         // Salva no servidor como um conhecimento especial
-        const res = await fetch('/chat', {
+        const res = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
@@ -957,7 +1121,7 @@ async function finalizeEnrollment(name, descriptor, voiceData) {
     addMessage('cain', `[SISTEMA]: Sincronizando perfil de ${name}...`);
     
     // Salva no servidor
-    const res = await fetch('/chat', {
+    const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -976,4 +1140,210 @@ async function finalizeEnrollment(name, descriptor, voiceData) {
         speak("Houve um erro ao sincronizar seus dados biométricos.", "pt-BR");
         isEnrollingBiometrics = false;
     }
+}
+
+// --- SISTEMA DE AUTENTICAÇÃO RESTAURADO ---
+function checkAuthStatus() {
+    if (!isAuthenticated) {
+        document.getElementById('security-overlay').classList.remove('hidden');
+        speak('Modo restrito ativado. Insira suas credenciais para destravar a memória.', 'pt-BR');
+    }
+}
+
+document.getElementById('sec-login-btn').addEventListener('click', () => {
+    let name = document.getElementById('sec-name').value.trim();
+    let pass = document.getElementById('sec-pass').value.trim();
+    if (name && pass) {
+        currentUser = name;
+        isAuthenticated = true;
+        document.getElementById('security-overlay').classList.add('hidden');
+        addMessage('cain', '[CAIN]: Acesso Autorizado. Banco de memória configurado para: ' + currentUser + '.');
+        speak('Acesso liberado. Bem-vindo de volta, ' + currentUser + '.', 'pt-BR');
+    } else {
+        alert('Preencha os campos Nome e Senha.');
+    }
+});
+
+// Add trigger logic to run after start
+setTimeout(checkAuthStatus, 500);
+
+window.fetchHistorySAC = async function() {
+    if (!isAuthenticated || !currentUser || currentUser.toUpperCase() !== 'MIDNET') {
+        addMessage('cain', '🔴 [ACESSO NEGADO] Privilégios insuficientes. Informações confidenciais do MikWeb estão restritas à conta MIDNET.');
+        if (typeof speak === 'function') speak('Acesso corporativo negado. Identidade insuficiente para requerer registros financeiros.', 'pt-BR');
+        return;
+    }
+
+    addMessage('cain', 'SISTEMA: Conectando aos servidores da matriz. Processando e baixando histórico corporativo do SAC... aguarde um momento pois as mídias estão sendo decodificadas.', true);
+    speak('Requisitando arquivos velhos do provedor para sua tela. Isso pode levar alguns segundos.', 'pt-BR');
+    try {
+        const req = await fetch('/api/chat/history?user=' + encodeURIComponent(currentUser));
+        const data = await req.json();
+        if (data.alerts && data.alerts.length > 0) {
+            data.alerts.forEach(alert => renderSACMessage(alert));
+            /* historico silencioso */
+        } else {
+            addMessage('cain', 'SISTEMA: Nenhum histórico encontrado.');
+            speak('Nenhuma conversa anterior foi localizada nos servidores MIKWEB.', 'pt-BR');
+        }
+    } catch(e) {
+        addMessage('cain', 'SISTEMA: Erro ao baixar histórico.');
+        speak('Falha na comunicação de arquivamento.', 'pt-BR');
+    }
+};
+
+
+window.readMessagesFor = function(name) {
+    const bubbles = document.querySelectorAll('.sac-message-bubble');
+    let messagesFound = [];
+    bubbles.forEach(b => {
+        const header = b.querySelector('.sac-header');
+        if (header && header.textContent.toLowerCase().includes(name.toLowerCase())) {
+            const body = b.querySelector('.sac-text-body');
+            if (body) {
+                // Ignore empty or weird lines, just text
+                if(body.textContent.trim().length > 0) messagesFound.push(body.textContent.trim());
+            }
+        }
+    });
+
+    if (messagesFound.length > 0) {
+        speak(`Mensagens localizadas na tela para ${name}: ` + messagesFound.join('. Próxima mensagem: '), 'pt-BR');
+    } else {
+        speak(`Senhor, não encontrei nenhuma mensagem de texto de ${name} no painel atual.`, 'pt-BR');
+    }
+};
+
+
+window.fetchRecentSAC = async function() {
+    if (!isAuthenticated || !currentUser || currentUser.toUpperCase() !== 'MIDNET') {
+        addMessage('cain', '🔴 [ACESSO NEGADO] Privilégios insuficientes. Informações confidenciais do MikWeb estão restritas à conta MIDNET.');
+        if (typeof speak === 'function') speak('Acesso corporativo negado. Identidade insuficiente para requerer registros financeiros.', 'pt-BR');
+        return;
+    }
+
+    addMessage('cain', 'SISTEMA: Trazendo as últimas mensagens mais recentes enviadas ao SAC. Aguarde.', true);
+    try {
+        const req = await fetch('/api/chat/recent?user=' + encodeURIComponent(currentUser));
+        const data = await req.json();
+        if (data.alerts && data.alerts.length > 0) {
+            data.alerts.forEach(alert => renderSACMessage(alert));
+        } else {
+            addMessage('cain', 'SISTEMA: Nenhuma mensagem recente foi processada.');
+        }
+    } catch(e) { console.error(e) }
+};
+
+function renderSACMessage(data) {
+    const div = document.createElement('div');
+    div.className = 'message cain-message sac-message-bubble';
+    
+    let html = `<div class="sac-header">📩 ${data.senderName} (WhatsApp/SAC)</div>`;
+    
+    if (data.textContent) {
+        html += `<div class="sac-text-body">${data.textContent}</div>`;
+    }
+    
+    if (data.fileUrl) {
+        if (data.fileType === 'photo') {
+            html += `<div class="sac-media"><img src="${data.fileUrl}" style="max-width:100%; border-radius:10px; cursor:pointer;" onclick="window.open('${data.fileUrl}')"></div>`;
+        } else if (data.fileType === 'audio') {
+            html += `<div class="sac-media"><audio controls src="${data.fileUrl}" style="width:100%"></audio></div>`;
+        } else if (data.fileType === 'document') {
+             html += `<div class="sac-media"><a href="${data.fileUrl}" target="_blank" class="action-btn">📄 ABRIR PDF / DOCUMENTO</a></div>`;
+        }
+    }
+    
+    div.innerHTML = html;
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+async function wipeWhatsApp() {
+    if (confirm("Senhor, deseja realmente apagar todas as mídias e o histórico do WhatsApp/SAC?")) {
+        try {
+            const res = await fetch('/clear_chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: currentUser })
+            });
+            if (res.ok) {
+                chatBox.innerHTML = '';
+                addMessage('cain', 'SISTEMA: Histórico e mídias removidas com sucesso.');
+                speak('Limpeza concluída, senhor.', 'pt-BR');
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+}
+
+//  RECONHECIMENTO DE VOZ POR PERFIL 
+let _voiceProfiles = [];    // [ { name, profile } ]
+let _voiceRegFlow = null;   // estado do cadastro ativo
+
+// Carrega perfis de voz do servidor na inicializacao
+async function loadVoiceProfiles() {
+    try {
+        const r = await fetch('/api/voice-profiles');
+        const d = await r.json();
+        _voiceProfiles = d.profiles || [];
+        console.log('[VOZ] Perfis carregados:', _voiceProfiles.length);
+    } catch(e) { console.warn('[VOZ] Erro ao carregar perfis:', e); }
+}
+
+// Salva perfil de voz no servidor (permanente)
+async function saveVoiceProfile(name, profile) {
+    try {
+        const r = await fetch('/api/voice-profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, profile })
+        });
+        const d = await r.json();
+        _voiceProfiles = d.profiles || [];
+        return true;
+    } catch(e) { console.error('[VOZ] Erro ao salvar:', e); return false; }
+}
+
+// Verifica se o texto reconhecido pertence a um perfil cadastrado
+// Retorna { name, profile } ou null
+function matchVoiceProfile(text) {
+    if (!_voiceProfiles.length) return null;
+    const norm = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+    const t = norm(text);
+    const words = t.split(/\s+/).filter(w => w.length >= 3);
+    for (const p of _voiceProfiles) {
+        const pname = norm(p.name);
+        const pwords = pname.split(/\s+/).filter(w => w.length >= 3);
+        // Match se qualquer palavra do nome conhecido aparecer no que foi falado
+        const hit = pwords.some(pw => words.some(w => w.includes(pw) || pw.includes(w)));
+        if (hit) return p;
+    }
+    return null;
+}
+
+// Inicia fluxo de cadastro de voz
+async function startVoiceRegistration() {
+    const profileToRegister = currentUser || 'VISITANTE';
+    addMessage('cain', 'Cadastro de voz iniciado. Qual e o seu nome? Fale claramente.');
+    speak('Qual e o seu nome? Fale claramente.');
+    // Aguarda resposta de voz ou texto
+    _voiceRegFlow = { profile: profileToRegister };
+}
+
+// Processa resposta do nome durante o fluxo de cadastro
+async function processVoiceRegName(name) {
+    if (!_voiceRegFlow) return false;
+    const profile = _voiceRegFlow.profile;
+    _voiceRegFlow = null;
+    const ok = await saveVoiceProfile(name, profile);
+    if (ok) {
+        addMessage('cain', 'Perfeito. Cadastrei sua voz com o nome ' + name + ' vinculado ao perfil ' + profile + '. Da proxima vez que voce falar, serei vou te reconhecer automaticamente.');
+        speak('Perfeito. Voz cadastrada com sucesso, ' + name + '.');
+    } else {
+        addMessage('cain', 'Erro ao salvar perfil de voz.');
+        speak('Erro ao salvar.');
+    }
+    return true;
 }

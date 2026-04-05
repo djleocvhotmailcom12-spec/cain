@@ -1,0 +1,27 @@
+{
+  "id": 6501,
+  "form_payment": "sicoob",
+  "name": "SICOOB API",
+  "active": true,
+  "created_at": "2026-01-05T17:54:09.000Z",
+  "updated_at": "2026-01-05T17:54:09.000Z",
+  "financial_account_id": 16517,
+  "identifier": "560910",
+  "payment_accountable": {
+    "id": 181,
+    "access_token_expires_at": "2026-04-04T03:05:04.000Z",
+    "bank_account_number": "560910",
+    "agency": "4436",
+    "fine": null,
+    "interest": null,
+    "conditional_discount_enabled": false,
+    "conditional_discount_type": null,
+    "conditional_discount_value": null,
+    "days_until_due_day": 0,
+    "payment_form": 1,
+    "created_at": "2026-01-05T17:54:09.117Z",
+    "updated_at": "2026-04-04T03:01:04.922Z",
+    "webhook_id": 5189,
+    "identifier": "560910"
+  }
+}

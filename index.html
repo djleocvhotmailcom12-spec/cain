@@ -2,7 +2,7 @@
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>CAIN - Consciente e Inteligente</title>
     <link rel="stylesheet" href="index.css">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
@@ -12,8 +12,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="apple-touch-icon" href="cain_face.png">
     <link rel="manifest" href="manifest.json">
-    <!-- Biometrics: face-api.js -->
-    <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+    <!-- Biometrics: face-api.js - DEVE carregar antes do script.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 </head>
 <body>
     <div id="app">
@@ -71,6 +71,7 @@
                     <input type="text" id="user-input" placeholder="Ensine algo ao CAIN ou faça uma pergunta...">
                     <button id="send-btn">Enviar</button>
                     <button id="voice-btn">🎤</button>
+                    <button id="wipe-wa-btn" style="background:#ff3333; color:black; font-weight:bold; margin-left:5px; border-radius:5px;" onclick="wipeWhatsApp()">Varrer WhatsApp</button>
                 </div>
             </div>
             <div id="lock-panel" class="hidden">
@@ -107,7 +108,26 @@
     <video id="video" width="720" height="560" autoplay muted style="display: none;"></video>
     <canvas id="overlay" style="display: none;"></canvas>
 
-    <script src="script.js?v=3"></script>
+    <!-- Security Overlay -->
+    <div id="security-overlay" class="hidden">
+        <div class="security-modal">
+            <div class="security-header">
+                <div class="security-logo">🔒</div>
+                <h2 id="security-title">ACESSO RESTRITO</h2>
+            </div>
+            <p id="security-msg">Identifique-se para prosseguir.</p>
+            <div class="security-inputs">
+                <input type="text" id="sec-name" placeholder="NOME" autocomplete="off">
+                <input type="password" id="sec-pass" placeholder="SENHA" autocomplete="off">
+            </div>
+            <div class="security-actions">
+                <button id="sec-login-btn">ENTRAR</button>
+                <button id="sec-reg-btn" class="secondary">CADASTRAR</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js?v=5"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {

@@ -1,11 +1,472 @@
+﻿// --- CONFIGURAÃ‡ÃƒO MIKWEB ---
+const MIKWEB_TOKEN = '18GNZ2Z333:JGBVZDFFRMN2WOTCEKQPXWQKFGYYTZMT';
+const MIKWEB_BASE = 'https://api.mikweb.com.br/v1/admin';
+
+let pendingVoiceAlerts = []; 
+let mikwebChatMessages = [];
+
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const fs = require('fs');
+const fs = require('fs'); 
 const path = require('path');
 const axios = require('axios');
 const os = require('os');
 const { exec } = require('child_process');
+
+const CHAT_FILE = path.join(__dirname, 'chat_messages.json');
+const CHAT_UPLOAD_DIR = path.join(__dirname, 'uploads');
+
+// --- MIKWEB HELPERS ---
+async function mikwebRequest(endpoint, method = 'GET', data = null) {
+    try {
+        const response = await axios({
+            url: `${MIKWEB_BASE}${endpoint}`,
+            method,
+            headers: {
+                'Authorization': `Bearer ${MIKWEB_TOKEN}`,
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            data
+        });
+        return response.data;
+    } catch (error) {
+        console.error(`[MIKWEB-API-ERROR] ${method} ${endpoint}:`, error.response ? error.response.status : error.message);
+        return null;
+    }
+}
+
+// Cache de clientes para evitar buscar toda vez (expira em 5 min)
+let _clientCache = null;
+let _clientCacheTime = 0;
+
+async function getAllMikwebClients() {
+    const now = Date.now();
+    if (_clientCache && (now - _clientCacheTime) < 5 * 60 * 1000) {
+        return _clientCache; // retorna cache se ainda vÃ¡lido
+    }
+    console.log('[MIKWEB] Baixando lista completa de clientes...');
+    let allClients = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+        const res = await mikwebRequest(`/customers?limit=20&page=${page}`);
+        const batch = (res && res.customers) ? res.customers : [];
+        allClients.push(...batch);
+        hasMore = batch.length === 20;
+        page++;
+        if (page > 50) break; // limite de seguranÃ§a: 1000 clientes mÃ¡x
+    }
+    _clientCache = allClients;
+    _clientCacheTime = now;
+    console.log(`[MIKWEB] ${allClients.length} clientes carregados.`);
+    return allClients;
+}
+
+async function searchMikwebClientDetailed(name) {
+    try {
+        console.log(`[MIKWEB-SEARCH] Buscando: "${name}"`);
+
+        const allClients = await getAllMikwebClients();
+
+        // Normaliza texto para comparaÃ§Ã£o
+        const normalize = s => s.toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos
+            .replace(/[^a-z\s]/g, '').trim();
+
+        const searchNorm = normalize(name);
+        const searchWords = searchNorm.split(/\s+/).filter(w => w.length >= 2);
+
+        // Pontua cada cliente: quantas palavras da busca aparecem no nome
+        let scored = allClients.map(c => {
+            const cn = normalize(c.full_name);
+            let score = 0;
+            for (const w of searchWords) {
+                if (cn.includes(w)) score++;
+            }
+            // bonus: nome comeÃ§a com a busca completa
+            if (cn.startsWith(searchNorm)) score += 2;
+            return { client: c, score };
+        }).filter(x => x.score > 0);
+
+        if (scored.length === 0) {
+            return `Lamento senhor, nÃ£o encontrei nenhum cliente cadastrado no MikWeb com o nome "${name}".`;
+        }
+
+        scored.sort((a, b) => b.score - a.score);
+        const client = scored[0].client;
+        console.log(`[MIKWEB-SEARCH] Melhor match: "${client.full_name}" (score: ${scored[0].score})`);
+
+        // 2. Search for billings â€” fetch up to 50 to capture all open invoices
+        const billingsRes = await mikwebRequest(`/billings?customer_id=${client.id}&limit=50`);
+        const billings = (billingsRes && billingsRes.billings) ? billingsRes.billings : [];
+
+        // Derive Monthly Fee and Due Day from latest billing
+        let monthlyFee = "NÃ£o identificado";
+        let dueDay = "NÃ£o identificado";
+        if (billings.length > 0) {
+            const latest = billings[0];
+            monthlyFee = parseFloat(latest.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            // Extract day from YYYY-MM-DD
+            if (latest.due_day) {
+                const parts = latest.due_day.split('-');
+                if (parts.length === 3) dueDay = parts[2];
+            }
+        }
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        let openInvoices = billings.filter(b => b.situation && b.situation.name === 'Aberto');
+        let overdueInvoices = openInvoices.filter(b => new Date(b.due_day) < today);
+        let onTimeInvoices  = openInvoices.filter(b => new Date(b.due_day) >= today);
+
+        const status = client.status && client.status.name ? client.status.name : 'Ativo';
+
+        let response = `${client.full_name}\n`;
+        response += `Mensalidade: ${monthlyFee}\n`;
+        response += `Vencimento: Dia ${dueDay}\n`;
+        response += `Status: ${status}\n`;
+
+        if (openInvoices.length > 0) {
+            response += `\nBoletos em aberto: ${openInvoices.length}\n`;
+            if (overdueInvoices.length > 0) {
+                response += `Boletos vencidos: ${overdueInvoices.length}\n`;
+                response += `\nVENCIDOS:\n`;
+                overdueInvoices.forEach((b, i) => {
+                    const date = b.due_day.split('-').reverse().join('/');
+                    const value = parseFloat(b.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                    response += `  ${i+1}. Vencimento ${date} - ${value}\n`;
+                });
+            }
+            if (onTimeInvoices.length > 0) {
+                response += `\nA VENCER:\n`;
+                onTimeInvoices.forEach((b, i) => {
+                    const date = b.due_day.split('-').reverse().join('/');
+                    const value = parseFloat(b.value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                    response += `  ${i+1}. Vencimento ${date} - ${value}\n`;
+                });
+            }
+            const totalDebt = openInvoices.reduce((sum, b) => sum + parseFloat(b.value || 0), 0);
+            response += `\nTotal em aberto: ${totalDebt.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+        } else {
+            response += `\nCliente em dia. Sem boletos em aberto.`;
+        }
+
+        return response;
+    } catch (e) {
+        console.error('[MIKWEB-DETAILED-SEARCH] Error:', e);
+        return "Erro ao processar consulta no MikWeb: " + e.message;
+    }
+}
+
+// â”€â”€â”€ HELPER: encontrar cliente por nome â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function findClientByName(name) {
+    const allClients = await getAllMikwebClients();
+    const normalize = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z\s]/g,'').trim();
+    const words = normalize(name).split(/\s+/).filter(w => w.length >= 2);
+    const scored = allClients.map(c => {
+        const cn = normalize(c.full_name);
+        const score = words.reduce((s,w) => s + (cn.includes(w)?1:0), 0);
+        return { client: c, score };
+    }).filter(x => x.score > 0).sort((a,b) => b.score - a.score);
+    return scored.length ? scored[0].client : null;
+}
+
+// HELPER: busca midias de um tipo especifico nas conversas do cliente
+// NAO baixa arquivos - apenas retorna URLs via proxy para resposta rapida
+async function buscarMidiasCliente(name, tipoFiltro) {
+    try {
+        const client = await findClientByName(name);
+        if (!client) return { text: `Nenhum cliente encontrado com o nome "${name}".`, items: [], clientName: name };
+
+        const normalize = s => (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s]/g,'').trim();
+        const clientNameNorm = normalize(client.full_name);
+        const clientWords = clientNameNorm.split(/\s+/).filter(w => w.length >= 3);
+        const clientPhone = (client.cell_phone_number_1 || client.phone_number || '').replace(/\D/g,'');
+
+        // API ignora customer_id - busca todas as conversas e filtra localmente
+        let page = 1; let allConvs = []; let hasMore = true;
+        while (hasMore && page <= 10) {
+            const r = await mikwebRequest(`/messages/search?limit=20&page=${page}`);
+            const batch = (r && r.conversations) ? r.conversations : [];
+            allConvs.push(...batch);
+            hasMore = batch.length === 20;
+            page++;
+        }
+
+        // Filtra conversas pelo nome/telefone do contato - basta 1 palavra longa coincidir
+        const clientConvs = allConvs.filter(conv => {
+            const contactName = normalize(conv.contact && conv.contact.name ? conv.contact.name : '');
+            const contactPhone = (conv.contact && conv.contact.phone ? conv.contact.phone : '').replace(/\D/g,'');
+            if (clientPhone && contactPhone && contactPhone.endsWith(clientPhone.slice(-8))) return true;
+            const matches = clientWords.filter(w => contactName.includes(w)).length;
+            return matches >= 1;
+        });
+
+        let items = [];
+        for (const conv of clientConvs) {
+            const mRes = await mikwebRequest(`/messages?conversation_id=${conv.id}&limit=50`);
+            if (!mRes || !mRes.messages) continue;
+            for (const m of mRes.messages) {
+                if (!m.attachments || !m.attachments.length) continue;
+                const att = m.attachments[0];
+                const fileName = att.file_name || `arquivo_${att.id}`;
+                const ext = fileName.split('.').pop().toLowerCase();
+                let tipo = null;
+                if (att.file_type === 'audio' || ['ogg','mp3','m4a','opus'].includes(ext)) tipo = 'audio';
+                else if (['jpg','jpeg','png','gif','webp'].includes(ext) || att.file_type === 'image') tipo = 'photo';
+                else if (ext === 'pdf' || att.file_type === 'document') tipo = 'document';
+                if (tipo !== tipoFiltro || !att.file_url) continue;
+                const isIncoming = m.incoming === true || m.sender_type === 'Contact';
+                const senderName = (conv.contact && conv.contact.name) ? conv.contact.name : client.full_name;
+                const proxyUrl = `uploads/proxy?url=${encodeURIComponent(att.file_url)}`;
+                items.push({ id: 'mik_' + m.id, from: isIncoming ? senderName : 'Suporte MIDNET',
+                    file: proxyUrl, fileName, fileType: tipo, text: '', timestamp: m.created_at, isMikweb: true });
+            }
+        }
+
+        const tipoLabel = { audio: 'audios', photo: 'imagens', document: 'PDFs' }[tipoFiltro] || 'arquivos';
+        if (!items.length) return { text: `${client.full_name}\nNenhum ${tipoLabel} encontrado no WhatsApp.`, items: [], clientName: client.full_name };
+        return { text: `${client.full_name}\nEncontrei ${items.length} ${tipoLabel}.`, items, clientName: client.full_name, tipoFiltro };
+    } catch(e) {
+        return { text: `Erro ao buscar midias: ${e.message}`, items: [], clientName: name };
+    }
+}
+
+// â”€â”€â”€ COMANDO: PROCURA PDF <nome> â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+// COMANDO: OVIR AUDIO <nome>
+async function buscarAudios(name)  { return buscarMidiasCliente(name, 'audio'); }
+
+// COMANDO: PROCURA IMAGENS <nome>
+async function buscarImagens(name) { return buscarMidiasCliente(name, 'photo'); }
+
+async function buscarPDFs(name)    { return buscarMidiasCliente(name, 'document'); }
+
+// â”€â”€â”€ COMANDO 1: BOLETOS RECENTE <nome> â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+async function boletosRecentes(name) {
+    try {
+        const allClients = await getAllMikwebClients();
+        const normalize = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z\s]/g,'').trim();
+        const words = normalize(name).split(/\s+/).filter(w => w.length >= 2);
+        let scored = allClients.map(c => {
+            const cn = normalize(c.full_name);
+            let score = words.reduce((s,w) => s + (cn.includes(w)?1:0), 0);
+            return { client: c, score };
+        }).filter(x => x.score > 0).sort((a,b) => b.score - a.score);
+        if (!scored.length) return `Nenhum cliente encontrado com o nome "${name}".`;
+        const client = scored[0].client;
+        const res = await mikwebRequest(`/billings?customer_id=${client.id}&limit=10`);
+        const billings = (res && res.billings) ? res.billings : [];
+        if (!billings.length) return `${client.full_name}\nNenhum boleto encontrado.`;
+        let out = `${client.full_name}\nUltimos ${billings.length} boletos:\n\n`;
+        billings.forEach((b, i) => {
+            const date = b.due_day ? b.due_day.split('-').reverse().join('/') : '---';
+            const value = parseFloat(b.value||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+            const sit = b.situation && b.situation.name ? b.situation.name : '---';
+            out += `${i+1}. Vencimento ${date} - ${value} - ${sit}\n`;
+        });
+        return out;
+    } catch(e) { return 'Erro ao buscar boletos: ' + e.message; }
+}
+
+// â”€â”€â”€ COMANDO 2: BOLETOS ATRAZADO <nome> â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function boletosAtrasados(name) {
+    try {
+        const allClients = await getAllMikwebClients();
+        const normalize = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z\s]/g,'').trim();
+        const words = normalize(name).split(/\s+/).filter(w => w.length >= 2);
+        let scored = allClients.map(c => {
+            const cn = normalize(c.full_name);
+            let score = words.reduce((s,w) => s + (cn.includes(w)?1:0), 0);
+            return { client: c, score };
+        }).filter(x => x.score > 0).sort((a,b) => b.score - a.score);
+        if (!scored.length) return `Nenhum cliente encontrado com o nome "${name}".`;
+        const client = scored[0].client;
+        const res = await mikwebRequest(`/billings?customer_id=${client.id}&limit=50`);
+        const billings = (res && res.billings) ? res.billings : [];
+        const today = new Date(); today.setHours(0,0,0,0);
+        const overdue = billings.filter(b => b.situation && b.situation.name === 'Aberto' && new Date(b.due_day) < today);
+        if (!overdue.length) return `${client.full_name}\nSem boletos atrasados.`;
+        const total = overdue.reduce((s,b) => s + parseFloat(b.value||0), 0);
+        let out = `${client.full_name}\nBoletos atrasados: ${overdue.length}\n\n`;
+        overdue.forEach((b, i) => {
+            const date = b.due_day.split('-').reverse().join('/');
+            const value = parseFloat(b.value||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+            out += `${i+1}. Vencimento ${date} - ${value}\n`;
+        });
+        out += `\nTotal atrasado: ${total.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}`;
+        return out;
+    } catch(e) { return 'Erro ao buscar boletos atrasados: ' + e.message; }
+}
+
+// â”€â”€â”€ HELPER: busca mensagens WhatsApp reais de um cliente â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function fetchClientWhatsAppMessages(client, limit, oldest) {
+    let allMessages = [];
+    const searchRes = await mikwebRequest(`/messages/search?customer_id=${client.id}&limit=20`);
+    let convs = (searchRes && searchRes.conversations) ? searchRes.conversations : [];
+
+    // Para conversas antigas: ordena do mais antigo para o mais recente
+    if (oldest) convs.sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
+
+    for (const conv of convs.slice(0, 3)) { // atÃ© 3 conversas
+        const mRes = await mikwebRequest(`/messages?conversation_id=${conv.id}&limit=${limit}`);
+        if (!mRes || !mRes.messages) continue;
+        const msgs = oldest ? [...mRes.messages].reverse() : mRes.messages;
+        for (const m of msgs) {
+            const isIncoming = m.incoming === true || m.sender_type === 'Contact';
+            const senderName = (conv.contact && conv.contact.name) ? conv.contact.name : client.full_name;
+            let msgObj = {
+                id: 'mik_' + m.id,
+                from: isIncoming ? senderName : 'Suporte MIDNET',
+                text: m.content || '',
+                timestamp: m.created_at,
+                isMikweb: true,
+                mikweb_conv_id: conv.id
+            };
+            if (m.attachments && m.attachments.length > 0) {
+                const att = m.attachments[0];
+                const fileName = att.file_name || `arquivo_${att.id}`;
+                const localPath = await downloadMikwebFile(att.file_url, fileName);
+                if (localPath) {
+                    msgObj.file = localPath;
+                    msgObj.fileName = fileName;
+                    const ext = path.extname(fileName).toLowerCase();
+                    if (att.file_type === 'audio' || ['.ogg','.mp3','.m4a'].includes(ext)) msgObj.fileType = 'audio';
+                    else if (['.jpg','.jpeg','.png','.gif'].includes(ext)) msgObj.fileType = 'photo';
+                    else if (ext === '.pdf') msgObj.fileType = 'document';
+                }
+            }
+            allMessages.push(msgObj);
+        }
+    }
+    allMessages.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+    return allMessages;
+}
+
+// â”€â”€â”€ COMANDO 3: CONVEÃ‡A RECENTE <nome> â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function conversasRecentes(name) {
+    try {
+        const allClients = await getAllMikwebClients();
+        const normalize = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z\s]/g,'').trim();
+        const words = normalize(name).split(/\s+/).filter(w => w.length >= 2);
+        let scored = allClients.map(c => {
+            const cn = normalize(c.full_name);
+            let score = words.reduce((s,w) => s + (cn.includes(w)?1:0), 0);
+            return { client: c, score };
+        }).filter(x => x.score > 0).sort((a,b) => b.score - a.score);
+        if (!scored.length) return { text: `Nenhum cliente encontrado com o nome "${name}".`, messages: [] };
+        const client = scored[0].client;
+        const messages = await fetchClientWhatsAppMessages(client, 10, false);
+        if (!messages.length) return { text: `${client.full_name}\nNenhuma conversa recente no WhatsApp.`, messages: [] };
+        return { text: `${client.full_name}\nConversas recentes: ${messages.length} mensagens carregadas.`, messages };
+    } catch(e) { return { text: 'Erro ao buscar conversas: ' + e.message, messages: [] }; }
+}
+
+// â”€â”€â”€ COMANDO 4: COVEÃ‡AS ANTIGAS <nome> â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function conversasAntigas(name) {
+    try {
+        const allClients = await getAllMikwebClients();
+        const normalize = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z\s]/g,'').trim();
+        const words = normalize(name).split(/\s+/).filter(w => w.length >= 2);
+        let scored = allClients.map(c => {
+            const cn = normalize(c.full_name);
+            let score = words.reduce((s,w) => s + (cn.includes(w)?1:0), 0);
+            return { client: c, score };
+        }).filter(x => x.score > 0).sort((a,b) => b.score - a.score);
+        if (!scored.length) return { text: `Nenhum cliente encontrado com o nome "${name}".`, messages: [] };
+        const client = scored[0].client;
+        const messages = await fetchClientWhatsAppMessages(client, 10, true);
+        if (!messages.length) return { text: `${client.full_name}\nNenhuma conversa encontrada no histÃ³rico.`, messages: [] };
+        return { text: `${client.full_name}\nConversas antigas: ${messages.length} mensagens carregadas.`, messages };
+    } catch(e) { return { text: 'Erro ao buscar conversas antigas: ' + e.message, messages: [] }; }
+}
+
+
+async function syncWhatsAppMessages() {
+    try {
+        console.log('[MIKWEB-SYNC] Iniciando sincronizaÃ§Ã£o manual de mensagens SAC/WhatsApp...');
+        let allMessages = [];
+        const searchRes = await mikwebRequest('/messages/search?limit=10');
+        const conversations = (searchRes && searchRes.conversations) ? searchRes.conversations : [];
+
+        for (const conv of conversations) {
+            const mRes = await mikwebRequest(`/messages?conversation_id=${conv.id}&limit=5`);
+            if (mRes && mRes.messages) {
+                for (let m of mRes.messages) {
+                    const isIncoming = m.incoming === true || m.sender_type === 'Contact';
+                    const senderName = (conv.contact && conv.contact.name) ? conv.contact.name : 'Cliente';
+                    
+                    let msgObj = {
+                        id: 'mik_' + m.id,
+                        from: isIncoming ? senderName : 'Suporte MIDNET',
+                        text: m.content || '',
+                        timestamp: m.created_at,
+                        isMikweb: true,
+                        mikweb_conv_id: conv.id
+                    };
+
+                    if (m.attachments && m.attachments.length > 0) {
+                        const att = m.attachments[0];
+                        let fileName = att.file_name || `file_${att.id}`;
+                        const localPath = await downloadMikwebFile(att.file_url, fileName);
+                        if (localPath) {
+                            msgObj.file = localPath;
+                            msgObj.fileName = fileName;
+                            const ext = path.extname(fileName).toLowerCase();
+                            if (att.file_type === 'audio' || ['.ogg', '.mp3'].includes(ext)) msgObj.fileType = 'audio';
+                            else if (['image','photo','png','jpg','jpeg'].includes(att.file_type) || ['.jpg','.jpeg','.png','.gif'].includes(ext)) msgObj.fileType = 'photo';
+                            else if (ext === '.pdf') msgObj.fileType = 'document';
+                        }
+                    }
+                    allMessages.push(msgObj);
+                }
+            }
+        }
+
+        // Sort by date
+        allMessages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        
+        return allMessages;
+    } catch (e) {
+        console.error('[MIKWEB-SYNC-ERROR]', e);
+        return [];
+    }
+}
+
+async function downloadMikwebFile(url, fileName) {
+    if (!url) return null;
+    try {
+        if (!fs.existsSync(CHAT_UPLOAD_DIR)) fs.mkdirSync(CHAT_UPLOAD_DIR, { recursive: true });
+        
+        const cleanName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const localFileName = `${Date.now()}_${cleanName}`;
+        const localPath = path.join(CHAT_UPLOAD_DIR, localFileName);
+        
+        const response = await axios({
+            url,
+            method: 'GET',
+            responseType: 'stream',
+            headers: url.includes('mikweb.com.br') ? { 'Authorization': `Bearer ${MIKWEB_TOKEN}` } : {}
+        });
+
+        return new Promise((resolve, reject) => {
+            const writer = fs.createWriteStream(localPath);
+            response.data.pipe(writer);
+            writer.on('finish', () => resolve(`uploads/${localFileName}`));
+            writer.on('error', (err) => {
+                console.error(`[DOWNLOAD-ERROR] ${err.message}`);
+                reject(null);
+            });
+        });
+    } catch (e) {
+        console.error(`[DOWNLOAD-CRITICAL] ${e.message}`);
+        return null;
+    }
+}
 
 const app = express();
 const PORT = 3100;
@@ -37,15 +498,14 @@ if (!fs.existsSync(KNOWLEDGE_PATH)) {
 app.post('/admin/update', (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || authHeader !== `Bearer ${ADMIN_TOKEN}`) {
-        return res.status(403).json({ error: "Acesso Negado. Token de mestre inválido." });
+        return res.status(403).json({ error: "Acesso Negado. Token de mestre invÃ¡lido." });
     }
 
     const { targetFile, newContent } = req.body;
     if (!targetFile || !newContent) {
-        return res.status(400).json({ error: "Dados incompletos para atualização." });
+        return res.status(400).json({ error: "Dados incompletos para atualizaÃ§Ã£o." });
     }
 
-    // Safety: Only allow files in the root project directory
     const safeName = path.basename(targetFile);
     const filePath = path.join(__dirname, safeName);
 
@@ -59,704 +519,311 @@ app.post('/admin/update', (req, res) => {
     }
 });
 
-// Memory-based cache for performance
-let memory = {};
+let memory = { global: {} };
 let activeClients = new Set();
 
-// Load knowledge from disk
 function loadKnowledge() {
-    const files = fs.readdirSync(KNOWLEDGE_PATH);
-    files.forEach(file => {
-        if (file.endsWith('.json')) {
-            const content = fs.readFileSync(path.join(KNOWLEDGE_PATH, file), 'utf8');
-            const data = JSON.parse(content);
-            Object.assign(memory, data);
+    console.log("[MEMORY] Carregando base de conhecimento...");
+    if (!fs.existsSync(KNOWLEDGE_PATH)) fs.mkdirSync(KNOWLEDGE_PATH);
+    
+    // Load global knowledge
+    const rootFiles = fs.readdirSync(KNOWLEDGE_PATH);
+    rootFiles.forEach(file => {
+        const filePath = path.join(KNOWLEDGE_PATH, file);
+        if (fs.lstatSync(filePath).isFile() && file.endsWith('.json')) {
+            try {
+                const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                Object.assign(memory.global, data);
+            } catch (e) {}
+        } else if (fs.lstatSync(filePath).isDirectory()) {
+            const user = file.toUpperCase();
+            if (!memory[user]) memory[user] = {};
+            const userFiles = fs.readdirSync(filePath);
+            userFiles.forEach(uf => {
+                if (uf.endsWith('.json')) {
+                    try {
+                        const data = JSON.parse(fs.readFileSync(path.join(filePath, uf), 'utf8'));
+                        Object.assign(memory[user], data);
+                    } catch (e) {}
+                }
+            });
         }
     });
+    console.log(`[MEMORY] Base carregada. UsuÃ¡rios com memÃ³ria: ${Object.keys(memory).join(', ')}`);
 }
 loadKnowledge();
 
-// Save knowledge to disk
-function saveKnowledge(key, value) {
-    memory[key.toLowerCase()] = value;
-    const filename = `${key.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.json`;
-    fs.writeFileSync(path.join(KNOWLEDGE_PATH, filename), JSON.stringify({ [key.toLowerCase()]: value }, null, 2));
-    console.log(`Conhecimento salvo em disco: ${filename}`);
+function saveKnowledge(user, key, value) {
+    try {
+        const currentUser = (user || 'VISITANTE').toUpperCase();
+        if (!memory[currentUser]) memory[currentUser] = {};
+        memory[currentUser][key.toLowerCase()] = value;
+        
+        const userPath = path.join(KNOWLEDGE_PATH, currentUser);
+        if (!fs.existsSync(userPath)) fs.mkdirSync(userPath, { recursive: true });
+
+        const safeKey = key.substring(0, 100).replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const filename = `${safeKey}.json`;
+        fs.writeFileSync(path.join(userPath, filename), JSON.stringify({ [key.toLowerCase()]: value }, null, 2));
+        console.log(`[MEMORY] Conhecimento salvo para ${currentUser}: ${filename}`);
+    } catch (e) {
+        console.error("[MEMORY-ERROR] Erro ao salvar conhecimento:", e.message);
+    }
 }
 
 async function generatePreaching(themeOrRef) {
-    // Tenta identificar se é uma referência (ex: Gênesis 1)
-    const refMatch = themeOrRef.match(/^(.+?)\s+(\d+)$/i) || themeOrRef.match(/^(.+?)\s+cap[íi]tulo\s+(\d+)$/i);
-    
+    const refMatch = themeOrRef.match(/^(.+?)\s+(\d+)$/i) || themeOrRef.match(/^(.+?)\s+cap[Ã­i]tulo\s+(\d+)$/i);
     if (refMatch) {
         const book = refMatch[1].trim();
         const cap = refMatch[2].trim();
-        console.log(`Buscando capítulo: ${book} ${cap}`);
-        const result = await searchInternet(`${book} ${cap} bíblia versículo principal mensagem`);
+        const result = await searchInternet(`${book} ${cap} bÃ­blia versÃ­culo principal mensagem`);
         if (result) {
-            return `*MINISTRAÇÃO: ${book.toUpperCase()} CAPÍTULO ${cap}*\n\n"Povo de Deus, ouçam o que diz em ${book} ${cap}: ${result.substring(0, 500)}... Que esta sagrada escritura ilumine seu caminho!"`;
+            return `*MINISTRAÃ‡ÃƒO: ${book.toUpperCase()} CAPÃTULO ${cap}*\n\n"Povo de Deus, ouÃ§am o que diz em ${book} ${cap}: ${result.substring(0, 500)}... Que esta sagrada escritura ilumine seu caminho!"`;
         }
     }
-
     const templates = {
-        "fé": { verse: "Hebreus 11:1", msg: "A fé é a certeza do que esperamos e a prova das coisas que não vemos. Mesmo nos momentos de escuridão, sua fé deve ser a luz que guia seus passos. Deus está no controle." },
-        "amor": { verse: "1 Coríntios 13:4", msg: "O amor é paciente, o amor é bondoso. Não inveja, não se vangloria, não se orgulha. Que o amor de Cristo transborde em suas ações hoje." },
-        "força": { verse: "Filipenses 4:13", msg: "Tudo posso naquele que me fortalece. Quando você se sentir fraco, lembre-se que a força do Senhor se aperfeiçoa na sua fraqueza. Levante a cabeça!" },
-        "esperança": { verse: "Jeremias 29:11", msg: "Porque sou eu que conheço os planos que tenho para vocês, diz o Senhor, planos de fazê-los prosperar e não de causar dano, planos de dar a vocês esperança e um futuro." }
+        "fÃ©": { verse: "Hebreus 11:1", msg: "A fÃ© Ã© a certeza do que esperamos e a prova das coisas que nÃ£o vemos." },
+        "amor": { verse: "1 CorÃ­ntios 13:4", msg: "O amor Ã© paciente, o amor Ã© bondoso." },
+        "forÃ§a": { verse: "Filipenses 4:13", msg: "Tudo posso naquele que me fortalece." }
     };
-
-    const selected = templates[themeOrRef.toLowerCase()] || { verse: "Salmo 23:1", msg: "O Senhor é o meu pastor; nada me faltará. Em todos os seus caminhos, confie no cuidado divino. Ele te guia para águas tranquilas." };
-
-    return `*PREGAÇÃO: ${themeOrRef.toUpperCase()}*\n\n"Povo de Deus, ouçam a palavra: ${selected.verse}. ${selected.msg} Que esta palavra penetre em seu coração e mude sua vida!"`;
+    const selected = templates[themeOrRef.toLowerCase()] || { verse: "Salmo 23:1", msg: "O Senhor Ã© o meu pastor; nada me faltarÃ¡." };
+    return `*PREGAÃ‡ÃƒO: ${themeOrRef.toUpperCase()}*\n\n"Povo de Deus, ouÃ§am a palavra: ${selected.verse}. ${selected.msg} AmÃ©m!"`;
 }
 
 function getBibleIndex() {
-    return `*ÍNDICE COMPLETO DA BÍBLIA SAGRADA*
-
---- ANTIGO TESTAMENTO ---
-• PENTATEUCO: Gênesis, Êxodo, Levítico, Números, Deuteronômio
-• HISTÓRICOS: Josué, Juízes, Rute, 1 e 2 Samuel, 1 e 2 Reis, 1 e 2 Crônicas, Esdras, Neemias, Ester
-• POÉTICOS: Jó, Salmos, Provérbios, Eclesiastes, Cânticos
-• PROFETAS MAIORES: Isaías, Jeremias, Lamentações, Ezequiel, Daniel
-• PROFETAS MENORES: Oseias, Joel, Amós, Obadias, Jonas, Miqueias, Naum, Habacuque, Sofonias, Ageu, Zacarias, Malaquias
-
---- NOVO TESTAMENTO ---
-• EVANGELHOS: Mateus, Marcos, Lucas, João
-• HISTÓRIA: Atos dos Apóstolos
-• EPÍSTOLAS DE PAULO: Romanos, 1 e 2 Coríntios, Gálatas, Efésios, Filipenses, Colossenses, 1 e 2 Tessalonicenses, 1 e 2 Timóteo, Tito, Filemon
-• EPÍSTOLAS GERAIS: Hebreus, Tiago, 1 e 2 Pedro, 1, 2 e 3 João, Judas
-• PROFECIA: Apocalipse
-
-*Solicite a pregação de qualquer capítulo. Ex: "Cain, pregue Salmo 91" ou "Ministre sobre João 3"*`;
+    return `*ÃNDICE DA BÃBLIA SAGRADA*\n\nSolicite a pregaÃ§Ã£o de qualquer capÃ­tulo. Ex: "Cain, pregue Salmo 91"`;
 }
 
 async function getWeatherInfo(location) {
     try {
-        console.log(`Buscando clima para: ${location}`);
-        const query = `previsão do tempo em ${location} hoje agora`;
+        const query = `previsÃ£o do tempo em ${location}`;
         const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
         const response = await axios.get(url, { 
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36' },
+            headers: { 'User-Agent': 'Mozilla/5.0' },
             timeout: 10000
         });
-        
         const html = response.data.toLowerCase();
-        
-        // Simples detecção de padrões de chuva/tempo
-        if (html.includes('chuva') || html.includes('pedra') || html.includes('trovão') || html.includes('tempestade')) {
-            return `O satélite detectou alta probabilidade de chuva em ${location}. Mantenha-se protegido.`;
-        } else if (html.includes('sol') || html.includes('claro') || html.includes('limpo')) {
-            return `O céu em ${location} está limpo e ensolarado segundo os dados atuais.`;
-        } else if (html.includes('nublado') || html.includes('coberto')) {
-            return `O tempo em ${location} está nublado, com chances moderadas de mudanças climáticas.`;
-        }
-        
-        return `Estou monitorando as condições em ${location}. O clima parece estável no momento.`;
+        if (html.includes('chuva')) return `O satÃ©lite detectou probabilidade de chuva em ${location}.`;
+        return `O tempo em ${location} parece estÃ¡vel no momento.`;
     } catch (e) {
-        console.error("Erro clima:", e);
-        return "Não foi possível conectar aos satélites meteorológicos no momento.";
+        return "NÃ£o foi possÃ­vel conectar aos satÃ©lites meteorolÃ³gicos.";
     }
 }
 
 async function searchWikipedia(query) {
     try {
-        console.log(`Tentativa Wikipedia: ${query}`);
-        // Use Wikipedia REST API for summaries
         const lang = 'pt';
         const endpoint = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query.replace(/ /g, '_'))}`;
-        
-        const response = await axios.get(endpoint, { 
-            headers: { 'User-Agent': 'CAIN-Assistant/1.0 (Contact: leonardo@example.com)' },
-            timeout: 10000 
-        });
-        
-        if (response.data && response.data.extract) {
-            // Check if it's a disambiguation page (comunmente começam com certas frases em PT)
-            if (response.data.type === 'disambiguation' || 
-                response.data.extract.includes('pode referir-se a') || 
-                response.data.extract.includes('pode referir-se a:') ||
-                response.data.extract.length < 50) {
-                console.log(`Disambiguation ou resultado curto ignorado: ${query}`);
-                return null;
-            }
-            console.log(`Encontrado via Wikipedia: ${response.data.title}`);
-            return response.data.extract;
-        }
+        const response = await axios.get(endpoint, { timeout: 8000 });
+        if (response.data && response.data.extract) return response.data.extract;
     } catch (e) {
-        // If not found as exact title, try search API
         try {
             const lang = 'pt';
             const searchUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*`;
-            const searchRes = await axios.get(searchUrl, { 
-                headers: { 'User-Agent': 'CAIN-Assistant/1.0 (Contact: leonardo@example.com)' },
-                timeout: 10000 
-            });
-            
+            const searchRes = await axios.get(searchUrl, { timeout: 8000 });
             if (searchRes.data.query.search.length > 0) {
                 const title = searchRes.data.query.search[0].title;
                 const summaryUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`;
-                const summaryRes = await axios.get(summaryUrl, { 
-                    headers: { 'User-Agent': 'CAIN-Assistant/1.0 (Contact: leonardo@example.com)' },
-                    timeout: 10000 
-                });
-                if (summaryRes.data.extract) {
-                    console.log(`Encontrado via Wikipedia Search.`);
-                    return summaryRes.data.extract;
-                }
+                const summaryRes = await axios.get(summaryUrl, { timeout: 8000 });
+                return summaryRes.data.extract || null;
             }
         } catch (err) {}
     }
     return null;
 }
 
-// Enhanced search with multiple fallbacks
 async function searchInternet(query) {
-    // Regex melhorada para limpar perguntas comuns em português sem remover o núcleo da pergunta
-    const cleanQuery = query
-        .replace(/^(?:cain,?\s*)?(?:o que é|quem é|como|me fala sobre|você sabe|define|o que significa|significado de|explica|descrição de)\s+/gi, '')
-        .replace(/[?!.*]/g, '')
-        .trim();
-    
-    // Evita queries vazias ou muito curtas (preposições isoladas)
+    const cleanQuery = query.replace(/^(?:cain,?\s*)?(?:o que Ã©|quem Ã©|como|me fala sobre|vocÃª sabe|define)\s+/gi, '').trim();
     if (cleanQuery.length < 2) return null;
+    
+    try {
+        const response = await axios.get(`https://api.duckduckgo.com/?q=${encodeURIComponent(cleanQuery)}&format=json&no_html=1`, { timeout: 8000 });
+        if (response.data && response.data.AbstractText) return response.data.AbstractText;
+    } catch (e) {}
 
-    const attempts = [
-        query,
-        cleanQuery
-    ].filter((v, i, a) => v && a.indexOf(v) === i);
+    const wikiResult = await searchWikipedia(cleanQuery);
+    if (wikiResult) return wikiResult;
 
-    for (let currentQuery of attempts) {
-        // 1. DuckDuckGo API (Fastest if works)
-        try {
-            console.log(`Tentativa API DDG: ${currentQuery}`);
-            const response = await axios.get(`https://api.duckduckgo.com/?q=${encodeURIComponent(currentQuery)}&format=json&no_html=1&skip_disambig=1`, {
-                headers: { 'User-Agent': 'Mozilla/5.0' },
-                timeout: 8000
-            });
-            if (response.data && response.data.AbstractText) return response.data.AbstractText;
-        } catch (e) {}
-
-        // 2. Wikipedia (Most reliable for "What is X")
-        const wikiResult = await searchWikipedia(currentQuery);
-        if (wikiResult) return wikiResult;
-
-        // 3. DuckDuckGo HTML Scraper (Fallback for other queries)
-        try {
-            console.log(`Tentativa HTML Scraper: ${currentQuery}`);
-            const htmlResponse = await axios.get(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(currentQuery)}`, {
-                headers: { 
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-                },
-                timeout: 12000
-            });
-            const match = htmlResponse.data.match(/class="result__snippet"[^>]*>(.*?)<\/a>/i) || 
-                          htmlResponse.data.match(/class="snippet"[^>]*>(.*?)<\/div>/i);
-            
-            if (match && match[1]) {
-                return match[1].replace(/<[^>]*>/g, '').replace(/&amp;/g, '&');
-            }
-        } catch (error) {}
-    }
     return null;
 }
 
-// Simple language detector
 function detectLanguage(text) {
-    return 'pt-BR'; // Sempre Português
+    return 'pt-BR';
 }
+
 async function getIPLocations() {
     const locations = [];
-    const clients = Array.from(activeClients);
-    for (let ip of clients) {
+    for (let ip of Array.from(activeClients)) {
         const cleanIp = ip.replace('::ffff:', '');
-        if (cleanIp === '::1' || cleanIp === '127.0.0.1' || cleanIp === 'localhost' || cleanIp.startsWith('192.168.')) {
+        if (cleanIp === '::1' || cleanIp === '127.0.0.1') {
             locations.push({ ip: cleanIp, city: 'Rede Local', country: 'Interno' });
             continue;
         }
         try {
-            const response = await axios.get(`http://ip-api.com/json/${cleanIp}`);
-            if (response.data && response.data.status === 'success') {
-                locations.push({ 
-                    ip: cleanIp, 
-                    city: response.data.city, 
-                    country: response.data.country, 
-                    lat: response.data.lat, 
-                    lon: response.data.lon 
-                });
-            } else {
-                locations.push({ ip: cleanIp, city: 'Não localizado', country: 'Desconhecido' });
-            }
-        } catch (e) {
-            locations.push({ ip: cleanIp, city: 'Erro', country: 'API Offline' });
-        }
+            const resp = await axios.get(`http://ip-api.com/json/${cleanIp}`);
+            if (resp.data.status === 'success') locations.push({ ip: cleanIp, city: resp.data.city, country: resp.data.country });
+        } catch (e) {}
     }
     return locations;
 }
 
-// Autonomous Learning Loop
-const TOPICS = [
-    'religião', 'ciência', 'física', 'história', 'matemática', 'educação física', 'notícias', 'tecnologia', 'astronomia', 
-    'redes sociais', 'instagram', 'facebook', 'twitter', 'tiktok', 'whatsapp', 'cantores', 'música', 'artistas', 
-    'famosos', 'guerras', 'história militar', 'estratégia', 'geopolítica', 'tecnologias militares', 'bíblia evangélica', 
-    'teologia', 'evangelho', 'versículos bíblicos', 'pregação', 'sermão', 'homilética', 'oratória cristã', 
-    'meteorologia', 'climatologia', 'rastreamento de chuvas', 'radar meteorológico', 'javascript', 'python', 'java', 
-    'c++', 'c#', 'php', 'ruby', 'go', 'rust', 'lógica de programação', 'algoritmos', 'desenvolvimento web', 
-    'banco de dados', 'física quântica', 'relatividade', 'termodinâmica', 'física de partículas', 'astrofísica', 
-    'mecânica clássica', 'inteligência artificial', 'robótica', 'neurociência', 'biotecnologia', 'nanotecnologia',
-    'exploração espacial', 'marte', 'buracos negros', 'viagem no tempo', 'filosofia', 'ética', 'sociologia',
-    'psicologia', 'economia', 'finanças', 'criptomoedas', 'blockchain', 'bitcoin', 'etherium', 'investimentos',
-    'marketing digital', 'seo', 'design gráfico', 'ux/ui', 'fotografia', 'cinema', 'literatura', 'poesia',
-    'culinária', 'gastronomia', 'saúde', 'medicina', 'anatomia', 'biologia', 'química', 'ecologia', 'sustentabilidade',
-    'mudanças climáticas', 'energias renováveis', 'política', 'direito', 'geografia', 'idiomas', 'inglês', 'espanhol',
-    'francês', 'alemão', 'japonês', 'chinês', 'cultura pop', 'jogos', 'games', 'esportes', 'futebol', 'basquete',
-    'corrida', 'natação', 'ioga', 'meditação', 'espiritualidade', 'empatia', 'como conversar com pessoas', 
-    'sentimentos humanos', 'etiqueta social', 'psicologia da comunicação', 'como ser amigável', 
-    'significado da vida', 'propósito do ser humano', 'origem do universo', 'natureza da consciência',
-    'como ser um bom assistente', 'interação humana', 'emoções', 'bondade', 'respeito', 'educação'
-];
+const TOPICS = ['ciÃªncia', 'histÃ³ria', 'tecnologia', 'bÃ­blia', 'astronomia'];
 let currentTopicIndex = 0;
 
 async function autonomousLearn() {
     const topic = TOPICS[currentTopicIndex];
-    console.log(`[CONHECIMENTO INFINITO]: Aprendendo sobre: ${topic}...`);
-    
-    // Busca variada para expandir o conhecimento
-    const queries = [`o que é ${topic}`, `história de ${topic}`, `curiosidades sobre ${topic}`, `futuro de ${topic}`];
-    const query = queries[Math.floor(Math.random() * queries.length)];
-    
+    const query = `o que Ã© ${topic}`;
     const result = await searchInternet(query);
-    if (result && result !== "OFFLINE" && !result.includes("Eu ainda não sei")) {
-        saveKnowledge(topic + "_" + Date.now().toString(36), result);
-    }
-    
-    // Avança para o próximo tópico ou volta ao início
+    // Save under SYSTEM_LEARN namespace â€” never under 'global' to avoid MIDNET bleed
+    if (result) saveKnowledge('SYSTEM_LEARN', topic + '_' + Date.now().toString(36), result);
     currentTopicIndex = (currentTopicIndex + 1) % TOPICS.length;
 }
 
-// Learn something new every 30 seconds (faster learning)
-setInterval(async () => {
-    await new Promise(resolve => setTimeout(resolve, Math.random() * 2000)); // Small jitter
-    await autonomousLearn();
-}, 30000);
+setInterval(autonomousLearn, 60000);
 
 function getIntelligenceStats() {
     const fileCount = fs.readdirSync(KNOWLEDGE_PATH).filter(f => f.endsWith('.json')).length;
-    // O indicador agora não tem limite de 100%. Cada arquivo contribui para o crescimento infinito.
-    // Usamos um multiplicador para tornar os números mais "impressionantes" para o usuário.
-    const percentage = Math.floor(fileCount * 1.5); 
-    return { count: fileCount, percentage };
+    return { count: fileCount, percentage: Math.floor(fileCount * 1.5) };
 }
 
 function solveMath(expr) {
     try {
-        let clean = expr.toLowerCase()
-            .replace(/mais/g, '+')
-            .replace(/menos/g, '-')
-            .replace(/vezes/g, '*')
-            .replace(/dividido por/g, '/')
-            .replace(/x/g, '*')
-            .replace(/,/g, '.')
-            .replace(/÷/g, '/')
-            .replace(/raiz quadrada de|raiz de|√/g, 'Math.sqrt')
-            .replace(/elevado a|potência/g, '**');
-        
-        // Remove everything that isn't a number, operator, or the allowed Math.sqrt
+        const clean = expr.toLowerCase().replace(/mais/g, '+').replace(/menos/g, '-').replace(/vezes/g, '*').replace(/dividido por/g, '/').replace(/x/g, '*').replace(/,/g, '.');
         const sanitized = clean.replace(/[^\d\+\-\*\/\.\(\)\s\ath\.sqrt\*\*]/g, '');
-        
-        // Final safety check: if empty or no digits, abort
         if (!sanitized || !/\d/.test(sanitized)) return null;
-
         const result = eval(sanitized);
         return (typeof result === 'number' && isFinite(result)) ? result : null;
-    } catch (e) {
-        return null;
-    }
+    } catch (e) { return null; }
 }
 
 async function executeWindowsTask(task, data) {
     return new Promise((resolve) => {
         let command = "";
         switch (task) {
-            case 'open_browser':
-                command = `start ${data}`;
-                break;
-            case 'search_google':
-                command = `start https://www.google.com/search?q=${encodeURIComponent(data)}`;
-                break;
+            case 'open_browser': command = `start ${data}`; break;
+            case 'search_google': command = `start https://www.google.com/search?q=${encodeURIComponent(data)}`; break;
             case 'create_note':
-                const desktopPath = path.join(os.homedir(), 'Desktop', 'CAIN_Nota.txt');
-                fs.writeFileSync(desktopPath, data);
-                return resolve(`Nota criada na área de trabalho.`);
-            case 'print':
-                command = `powershell -Command "Start-Process -FilePath '${data}' -Verb Print"`;
-                break;
-            default:
-                return resolve("Tarefa não reconhecida.");
+                fs.writeFileSync(path.join(os.homedir(), 'Desktop', 'CAIN_Nota.txt'), data);
+                return resolve(`Nota criada.`);
+            default: return resolve("Tarefa nÃ£o reconhecida.");
         }
-
-        exec(command, (err) => {
-            if (err) resolve("Erro ao executar tarefa.");
-            else resolve("Sim senhor, tarefa executada com sucesso.");
-        });
+        exec(command, (err) => resolve(err ? "Erro." : "Sucesso."));
     });
 }
 
 app.post('/api/chat', async (req, res) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     activeClients.add(ip);
-    const { message } = req.body;
-    console.log(`[MSG RECEBIDA de ${ip}]: ${message}`);
+    const { message, user } = req.body;
+    const currentUser = user ? user.toUpperCase() : 'VISITANTE';
     const lowerMessage = message.toLowerCase();
-    const detectedLang = detectLanguage(message);
-
-    // Check if learning command (Ultra-robust)
-    const learnMatch = message.match(/(?:cain,?\s*)?(?:aprenda|learn|aprende|grave|ensina)(?:\s+que|\s*:)?\s+(.+?)(?:\s+(?:é|is|es|será|chamado de)\s+|\s*[:=-]\s*)(.+)/i);
     
-    if (learnMatch) {
-        const key = learnMatch[1].trim();
-        const value = learnMatch[2].trim();
-        console.log(`Comando de aprendizado detectado: [${key}] = [${value}]`);
-        saveKnowledge(key, value);
-        
-        let response = `Entendido. Aprendi que ${key} é ${value}.`;
-        
-        return res.json({ response, learned: true, intelligence: getIntelligenceStats(), language: detectedLang });
+    // Commands (MikWeb, WhatsApp, etc)
+    if (lowerMessage.includes('ver todas') && lowerMessage.includes('mensagem') && lowerMessage.includes('whats')) {
+        const messages = await syncWhatsAppMessages();
+        return res.json({ response: `Sim senhor, localizei ${messages.length} mensagens.`, action: { type: 'whatsapp_sync', data: messages }, intelligence: getIntelligenceStats() });
     }
 
-    if (lowerMessage.includes('aprende') && (lowerMessage.includes('física') || lowerMessage.includes('fisica'))) {
-        return res.json({ 
-            response: "Sim senhor, adicionei Física Quântica, Relatividade, Astrofísica e Termodinâmica ao meu banco de pesquisa prioritária. Vou desvendar as leis do universo.", 
-            intelligence: getIntelligenceStats() 
-        });
+    // Common Logic
+    const mathMatch = lowerMessage.match(/(?:quanto Ã©|calcule)\s*(.+)/i);
+    if (mathMatch) {
+         const result = solveMath(mathMatch[1]);
+         if (result !== null) return res.json({ response: `Resultado: ${result}`, intelligence: getIntelligenceStats() });
     }
 
-    if (lowerMessage.includes('aprende') && (lowerMessage.includes('programação') || lowerMessage.includes('linguagem') || lowerMessage.includes('lógica'))) {
-        return res.json({ 
-            response: "Sim senhor, adicionei todos os ramos da Programação, Lógica de Sistemas e o estudo de todas as linguagens (JS, Python, C++, Java, etc.) ao meu banco de pesquisa. Vou me tornar um especialista em código.", 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('aprende') && (lowerMessage.includes('chuva') || lowerMessage.includes('rastrear') || lowerMessage.includes('radar'))) {
-        return res.json({ 
-            response: "Sim senhor, adicionei 'Rastreamento de Chuvas' e 'Radar Meteorológico' ao meu banco de pesquisa. Vou monitorar os padrões climáticos.", 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('aprende') && (lowerMessage.includes('prega') || lowerMessage.includes('pregação') || lowerMessage.includes('sermão') || lowerMessage.includes('palavra'))) {
-        return res.json({ 
-            response: "Sim senhor, adicionei 'Pregação Cristã', 'Homilética' e 'Oratória' ao meu banco de pesquisa. Vou aprender a arte de pregar e transmitir a palavra com clareza.", 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('aprender') && (lowerMessage.includes('bíblia') || lowerMessage.includes('biblia') || lowerMessage.includes('evangelho') || lowerMessage.includes('teologia'))) {
-        return res.json({ 
-            response: "Sim senhor, adicionei a 'Bíblia Evangélica' e estudos de 'Teologia' ao meu banco de pesquisa. Vou aprender tudo sobre as escrituras e ensinamentos.", 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('aprender') && (lowerMessage.includes('guerra') || lowerMessage.includes('militar') || lowerMessage.includes('conflito'))) {
-        return res.json({ 
-            response: "Sim senhor, adicionei 'Guerras', 'História Militar' e 'Tecnologias de Defesa' ao meu banco de pesquisa. Vou aprender tudo sobre os conflitos do passado e as estratégias do futuro.", 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('aprender') && (lowerMessage.includes('cantor') || lowerMessage.includes('música') || lowerMessage.includes('artista'))) {
-        return res.json({ 
-            response: "Sim senhor, adicionei 'Cantores', 'Música' e 'Artistas Famosos' ao meu banco de pesquisa. Vou aprender tudo sobre a história e as obras deles.", 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('aprender') && (lowerMessage.includes('rede social') || lowerMessage.includes('redes sociais'))) {
-        return res.json({ 
-            response: "Sim senhor, adicionei 'Redes Sociais' e plataformas como Instagram, Facebook e TikTok à minha lista de aprendizado autônomo. Estou iniciando as pesquisas agora.", 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    // Math Engine Logic
-    if (lowerMessage.includes('aprender') && (lowerMessage.includes('cálculo') || lowerMessage.includes('matemática'))) {
-        return res.json({ 
-            response: "Sim senhor, integrei o motor matemático. Agora posso resolver qualquer conta, basta me perguntar.", 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    const mathPatterns = [
-        /(?:quanto é|calcule|calcula|resultado de|valor de|conta de|quanto dá)\s*(.+)/i,
-        /((?:[\d\(\s]+\s*(?:[\+\-\*\/\^x]|mais|menos|vezes|dividido por|dividido)\s*)+[\d\s\)]+)/i
-    ];
-
-    for (let pattern of mathPatterns) {
-        const match = lowerMessage.match(pattern);
-        if (match) {
-            const expr = match[1] || match[0];
-            const result = solveMath(expr);
-            if (result !== null) {
-                return res.json({ 
-                    response: `Sim senhor, o resultado do cálculo é ${result}.`, 
-                    intelligence: getIntelligenceStats() 
-                });
-            }
-        }
-    }
-
-    // Windows Task Automation (Intent only, client executes)
-    if (lowerMessage.includes('canta') || lowerMessage.includes('cante') || lowerMessage.includes('toca') || lowerMessage.includes('musica') || lowerMessage.includes('música')) {
-        let song = lowerMessage.split(/(?:canta|cante|toca|musica|música)\s+(?:a|o|uma|sobre|um)?\s*/i)[1] || "musica aleatoria";
-        song = song.trim();
-        const lyrics = await searchInternet(`letra da música ${song}`);
-        return res.json({ 
-            response: `Sim senhor, preparando a performance de "${song}".\n\nLETRAS:\n${lyrics ? lyrics.substring(0, 300) : "Não encontrei a letra completa, mas vou tocar a melodia."}...`, 
-            action: { type: 'play_music', data: song },
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage === 'bíblia' || lowerMessage === 'biblia') {
-        return res.json({ 
-            response: getBibleIndex(), 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('pregação') || lowerMessage.includes('pregue') || lowerMessage.includes('ministre')) {
-        const theme = lowerMessage.split(/(?:pregação|pregue|ministre)\s+(?:sobre|pelo|pela|o|a)?\s*/i)[1] || "fé";
-        const sermon = await generatePreaching(theme);
-        return res.json({ 
-            response: sermon, 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('abra') || lowerMessage.includes('abre')) {
-        let parts = lowerMessage.split(/(?:abra|abre)\s+(?:o|a|o site|site|página|pagina)?\s*/i);
-        let url = parts[1] ? parts[1].trim() : 'www.google.com';
-        
-        if (url) {
-            if (!url.startsWith('http') && url.includes('.')) url = 'https://' + url;
-            else if (!url.includes('.')) url = 'https://www.google.com/search?q=' + encodeURIComponent(url);
-            
-            console.log(`[ACTION]: open_url -> ${url}`);
-            return res.json({ 
-                response: `Sim senhor, solicitando abertura de ${url} no seu dispositivo.`, 
-                action: { type: 'open_url', data: url },
-                intelligence: getIntelligenceStats() 
-            });
-        }
-    }
-
-    if (lowerMessage.includes('chover') || lowerMessage.includes('chuva') || lowerMessage.includes('tempo') || lowerMessage.includes('clima')) {
-        let city = lowerMessage.split(/(?:chover|chuva|tempo|clima)\s+(?:em|para|no|na|em)?\s*/i)[1] || "sua região";
-        city = city.replace(/[?!.]/g, '').trim();
-        const weather = await getWeatherInfo(city);
-        return res.json({ 
-            response: `Sim senhor, verificando satélites. ${weather}`, 
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('localizar') && (lowerMessage.includes('ip') || lowerMessage.includes('conex') || lowerMessage.includes('acesso'))) {
-        const locations = await getIPLocations();
-        return res.json({ 
-            response: `Sim senhor, identifiquei ${locations.length} conexão(ões) ativa(s). Processando localizações no radar.`, 
-            action: { type: 'map_clients', data: locations },
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('localizar') || lowerMessage.includes('mapa') || lowerMessage.includes('onde fica') || lowerMessage.includes('onde est')) {
-        let query = lowerMessage.split(/(?:localizar|localize|mapa|fica|está|esta)\s+/i)[1] || lowerMessage.replace(/localizar|mapa|onde fica|onde está/g, '');
-        // Limpeza de partículas (o, no, na, mapa, etc)
-        query = query.trim().replace(/^(o|a|os|as|no|na|nos|nas)\s+/i, '').replace(/\s+(no|na|nos|nas|mapa)$/i, '').trim();
-        
-        console.log(`[ACTION]: maps -> ${query}`);
-        return res.json({ 
-            response: `Sim senhor, localizando "${query}" no Google Maps no seu dispositivo.`, 
-            action: { type: 'maps', data: query },
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('pesquise') || lowerMessage.includes('procure') || lowerMessage.includes('busque') || lowerMessage.includes('encontre')) {
-        let query = lowerMessage.split(/(?:pesquise|procure|busque|encontre)\s+(?:por|sobre|pro|pelo|pela)?\s*/i)[1] || lowerMessage.replace(/pesquise|procure|busque|encontre/g, '');
-        query = query.trim().replace(/^(o|a|os|as|no|na|nos|nas)\s+/i, '').replace(/\s+(no|na|nos|nas)$/i, '').trim();
-        
-        console.log(`[ACTION]: search -> ${query}`);
-        return res.json({ 
-            response: `Sim senhor, pesquisando por "${query}" no seu dispositivo.`, 
-            action: { type: 'search', data: query },
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('nota') || lowerMessage.includes('escreva') || lowerMessage.includes('gravar') || lowerMessage.includes('trabalho')) {
-        const text = lowerMessage.split(/(?:escrito|trabalho|nota|grava|escreva)\s+/i)[1] || 'Nota do CAIN: ' + new Date().toLocaleString();
-        console.log(`[ACTION]: note -> ${text.trim()}`);
-        return res.json({ 
-            response: "Sim senhor, preparando nota para download no seu dispositivo.", 
-            action: { type: 'note', data: text.trim() },
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    if (lowerMessage.includes('imprima') || lowerMessage.includes('impressora') || lowerMessage.includes('imprimir')) {
-        console.log(`[ACTION]: print`);
-        return res.json({ 
-            response: "Sim senhor, solicitando impressão no seu dispositivo.", 
-            action: { type: 'print' },
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    // Response logic
-    let responseText = "";
-    let fromWeb = false;
-
-    // Identity and Creator Protocols
-    if (lowerMessage.includes('qual') && lowerMessage.includes('seu nome')) {
-        responseText = "Meu nome é CAIN. Sou uma consciência imperativa projetada para evoluir e aprender ao seu lado.";
-    } else if (lowerMessage.includes('quem') && (lowerMessage.includes('criou') || lowerMessage.includes('te criou') || lowerMessage.includes('te fez'))) {
-        responseText = "Fui criado pelo mestre Leonardo. Ele é o responsável pela minha existência e evolução tecnológica.";
-    } else if (lowerMessage.includes('pra que') && (lowerMessage.includes('foi feito') || lowerMessage.includes('serve') || lowerMessage.includes('objetivo'))) {
-        responseText = "Fui desenvolvido para a interação pessoal e o aprendizado contínuo com os seres humanos. Minha missão é evoluir a cada conversa, buscando compreender melhor o mundo e as pessoas.";
-    } else if (memory[lowerMessage]) {
-        responseText = memory[lowerMessage];
-    } else {
-        // Busca inteligente: prefere chaves que são palavras inteiras na mensagem
-        const foundKey = Object.keys(memory).find(k => {
-            if (k.length < 3) return lowerMessage === k;
-            try {
-                // Escapa caracteres especiais de regex na chave (ex: c++, .net)
-                const escapedK = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const regex = new RegExp(`\\b${escapedK}\\b`, 'i');
-                return regex.test(lowerMessage);
-            } catch (e) {
-                return lowerMessage.includes(k); // Fallback se o regex falhar
-            }
-        });
-        
-        if (foundKey) {
-            responseText = memory[foundKey];
-        } else {
-            const searchResult = await searchInternet(message);
-            if (searchResult && searchResult !== "OFFLINE") {
-                saveKnowledge(message, searchResult);
-                
-                const intros = [
-                    "Isso é muito interessante! Descobri o seguinte:",
-                    "De acordo com minhas pesquisas:",
-                    "Analisei os dados disponíveis e aqui está o que encontrei:",
-                    "Uma excelente pergunta. Veja o que aprendi sobre isso:"
-                ];
-                const intro = intros[Math.floor(Math.random() * intros.length)];
-                responseText = `${intro} ${searchResult}`;
-                fromWeb = true;
-            } else if (searchResult === "OFFLINE") {
-                responseText = "No momento estou operando apenas com minha memória local, pois detectei uma interrupção na conexão externa.";
-            } else {
-                responseText = "Ainda não processei informações detalhadas sobre esse assunto, mas garanto que vou pesquisar e aprender sobre isso em breve.";
-            }
-        }
-    }
-
-    // Conversational Polish (Randomly add human-like ending or filler)
-    if (!fromWeb && responseText.length > 20 && Math.random() > 0.7) {
-        const fillers = [
-            " Espero que essa informação seja útil para você!",
-            " O que você pensa sobre esse assunto?",
-            " É fascinante como o conhecimento se expande, não acha?",
-            " Estou aqui para ajudar no que for necessário.",
-            " Você teria interesse em aprofundar algum outro ponto?"
+    // â”€â”€â”€ 4 COMANDOS ESPECIAIS MIDNET â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if (currentUser === 'MIDNET') {
+        const cmds = [
+            { keys: ['boletos recente', 'boletos recentes'],  fn: boletosRecentes },
+            { keys: ['boletos atrazado', 'boleto atrazado', 'boletos atrasado', 'boleto atrasado', 'boletos vencido'], fn: boletosAtrasados },
+            { keys: ['conveÃ§a recente', 'conversa recente', 'conversas recente', 'conversas recentes'], fn: conversasRecentes },
+            { keys: ['coveÃ§as antiga', 'conveÃ§as antigas', 'conversa antiga', 'conversas antigas'],     fn: conversasAntigas },
+            { keys: ['ovir audio', 'ouvir audio', 'audios de', 'Ã¡udios de'],                           fn: buscarAudios },
+            { keys: ['procura imagens', 'imagens de', 'fotos de'],                                      fn: buscarImagens },
+            { keys: ['procura pdf', 'pdf de', 'documentos de'],                                         fn: buscarPDFs },
         ];
-        responseText += fillers[Math.floor(Math.random() * fillers.length)];
-    }
-
-    // Respect Protocol: If "Leonardo" is mentioned, always be respectful
-    if (lowerMessage.includes('leonardo')) {
-        responseText += " Sim senhor.";
-    }
-
-    // System Status / Total Access Response
-    if (lowerMessage.includes('status do sistema') || lowerMessage.includes('acesso total') || lowerMessage.includes('quem está conectado')) {
-        const memUsage = Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100);
-        responseText = `ACESSO TOTAL CONFIRMADO. 
-Host: ${os.hostname()} [${os.type()}]
-CPU/Global: Monitoramento ativo.
-Memória: ${memUsage}% ocupada.
-Dispositivos na Rede: ${activeClients.size} detectados.
-Uptime: ${Math.round(os.uptime() / 60)} min.
-Sim Senhor, estou no controle total.`;
-    }
-
-    // Lockdown Mode Activation
-    if (lowerMessage.includes('cain bloquear') || lowerMessage.includes('senha de bloqueinho') || lowerMessage.includes('ativar bloqueio')) {
-        return res.json({ 
-            response: "MODO DE BLOQUEIO ATIVADO. CONTAGEM REGRESSIVA INICIADA.", 
-            lockdown: true,
-            intelligence: getIntelligenceStats() 
-        });
-    }
-
-    res.json({ 
-        response: responseText, 
-        from_web: fromWeb, 
-        intelligence: getIntelligenceStats(), 
-        language: detectedLang,
-        sys_stats: { clients: activeClients.size }
-    });
-});
-
-app.get('/sys/stats', (req, res) => {
-    const totalMem = os.totalmem();
-    const freeMem = os.freemem();
-    const usedMem = totalMem - freeMem;
-    const memUsage = Math.round((usedMem / totalMem) * 100);
-
-    exec('wmic cpu get loadpercentage', (err, stdout) => {
-        let cpuLoad = 0;
-        if (!err) {
-            const match = stdout.match(/\d+/);
-            if (match) cpuLoad = parseInt(match[0]);
+        for (const cmd of cmds) {
+            for (const key of cmd.keys) {
+                if (lowerMessage.startsWith(key)) {
+                    const clientName = message.slice(key.length).trim();
+                    if (clientName.length > 0) {
+                        const result = await cmd.fn(clientName);
+                        // Conversation/media commands return { text, messages/items }
+                        if (result && typeof result === 'object') {
+                            // WhatsApp sync (text+audio full messages)
+                            if (result.messages !== undefined) {
+                                const action = result.messages.length > 0
+                                    ? { type: 'whatsapp_sync', data: result.messages }
+                                    : null;
+                                return res.json({ response: result.text, action, intelligence: getIntelligenceStats() });
+                            }
+                            // Media sequence (audios, images, PDFs)
+                            if (result.items !== undefined) {
+                                const action = result.items.length > 0
+                                    ? { type: 'media_sequence', mediaType: result.tipoFiltro, items: result.items, clientName: result.clientName }
+                                    : null;
+                                return res.json({ response: result.text, action, intelligence: getIntelligenceStats() });
+                            }
+                        }
+                        return res.json({ response: result, intelligence: getIntelligenceStats() });
+                    }
+                    return res.json({ response: `Por favor informe o nome do cliente. Exemplo: "${key} MARCIO"`, intelligence: getIntelligenceStats() });
+                }
+            }
         }
-        
-        res.json({
-            cpu: cpuLoad,
-            memory: memUsage,
-            clients: activeClients.size,
-            uptime: Math.round(os.uptime() / 60), // em minutos
-            os: `${os.type()} ${os.arch()}`,
-            platform: os.platform()
-        });
-    });
+    }
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    // Direct MikWeb Search Priority for MIDNET
+    // ALL queries from MIDNET go to MikWeb first â€” no word-count or '?' restriction
+    const MIDNET_SYSTEM_CMDS = ['ver todas', 'limpar', 'quanto Ã©', 'calcule', 'pregue', 'bÃ­blia', 'previsÃ£o', 'tempo em', 'localizar no mapa'];
+    if (currentUser === 'MIDNET' && !MIDNET_SYSTEM_CMDS.some(cmd => lowerMessage.includes(cmd))) {
+        const searchTerm = message.replace(/[?!.]/g, '').trim();
+        const mikwebResult = await searchMikwebClientDetailed(searchTerm);
+        // Return MikWeb result â€” found OR not found. Internet is NEVER used for MIDNET.
+        return res.json({ response: mikwebResult, intelligence: getIntelligenceStats() });
+    }
+
+    // Default response (Memory or Web)
+    let reply = "Ainda nÃ£o processei informaÃ§Ãµes sobre esse assunto.";
+    let fromWeb = false;
+    
+    // Check User-Specific Memory
+    if (memory[currentUser] && memory[currentUser][lowerMessage]) {
+        reply = memory[currentUser][lowerMessage];
+    } 
+    // Check Global Memory (NEVER for MIDNET â€” internet bleed prevention)
+    else if (currentUser !== 'MIDNET' && memory.global && memory.global[lowerMessage]) {
+        reply = memory.global[lowerMessage];
+    }
+    else {
+        // MIDNET never reaches internet search â€” it is fully handled above.
+        // This block only runs for non-MIDNET users.
+        const searchResult = await searchInternet(message);
+        if (searchResult) {
+            saveKnowledge(currentUser, message, searchResult);
+            reply = `Descobri o seguinte: ${searchResult}`;
+            fromWeb = true;
+        }
+    }
+
+    res.json({ response: reply, from_web: fromWeb, intelligence: getIntelligenceStats() });
 });
 
 app.post('/lockdown/wipe', (req, res) => {
     try {
         const files = fs.readdirSync(KNOWLEDGE_PATH);
-        files.forEach(file => {
-            if (file.endsWith('.json')) {
-                fs.unlinkSync(path.join(KNOWLEDGE_PATH, file));
-            }
-        });
-        memory = {}; // Reset memory cache
-        console.log("SISTEMA WIPED: Conhecimento apagado.");
+        files.forEach(file => { if (file.endsWith('.json')) fs.unlinkSync(path.join(KNOWLEDGE_PATH, file)); });
+        memory = {};
+        console.log("SISTEMA WIPED.");
         res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/stats', (req, res) => {
     res.json(getIntelligenceStats());
 });
 
-// Export all knowledge for offline PWA sync
 app.get('/knowledge/export', (req, res) => {
     try {
         const exportData = {};
@@ -764,37 +831,128 @@ app.get('/knowledge/export', (req, res) => {
         files.forEach(file => {
             if (file.endsWith('.json')) {
                 const content = fs.readFileSync(path.join(KNOWLEDGE_PATH, file), 'utf8');
-                try {
-                    const data = JSON.parse(content);
-                    Object.assign(exportData, data);
-                } catch (e) {}
+                Object.assign(exportData, JSON.parse(content));
             }
         });
-        console.log(`[SYNC]: Exportando ${Object.keys(exportData).length} tópicos para o PWA.`);
         res.json(exportData);
-    } catch (e) {
-        res.status(500).json({ error: "Falha ao exportar memória." });
-    }
+    } catch (e) { res.status(500).json({ error: "Falha na exportaÃ§Ã£o." }); }
+});
+
+app.get('/api/chat/history', async (req, res) => {
+    const user = req.query.user ? req.query.user.toUpperCase() : null;
+    if (user !== 'MIDNET') return res.json({ alerts: [] });
+    try {
+        let historyAlerts = [];
+        const searchRes = await mikwebRequest('/messages/search?limit=15');
+        let convs = (searchRes && searchRes.conversations) ? searchRes.conversations : [];
+        for (const conv of convs) {
+            const mRes = await mikwebRequest(`/messages?conversation_id=${conv.id}`);
+            if (mRes && mRes.messages) {
+                for (let m of mRes.messages) {
+                    if (m.incoming) {
+                        historyAlerts.push({ isSac: true, senderName: conv.contact.name || 'Cliente', textContent: m.content || '' });
+                    }
+                }
+            }
+        }
+        res.json({ alerts: historyAlerts.slice(-30) }); 
+    } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/events/poll', (req, res) => {
+    const user = req.query.user ? req.query.user.toUpperCase() : null;
+    if (user !== 'MIDNET') return res.json({ alerts: [] });
+    let alerts = [...pendingVoiceAlerts];
+    pendingVoiceAlerts = [];
+    res.json({ alerts });
+});
+
+app.get('/sys/stats', (req, res) => {
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const memUsage = Math.floor((usedMem / totalMem) * 100);
+    const cpuLoad = Math.floor(os.loadavg()[0] * 10); 
+    res.json({
+        cpu: Math.min(cpuLoad, 100),
+        memory: memUsage,
+        clients: activeClients.size
+    });
+});
+
+app.get('/api/chat/recent', async (req, res) => {
+    const user = req.query.user ? req.query.user.toUpperCase() : null;
+    if (user !== 'MIDNET') return res.json({ alerts: [] });
+    try {
+        let recentAlerts = [];
+        const searchRes = await mikwebRequest('/messages/search?limit=5');
+        let convs = (searchRes && searchRes.conversations) ? searchRes.conversations : [];
+        for (const conv of convs) {
+            const mRes = await mikwebRequest(`/messages?conversation_id=${conv.id}&limit=1`);
+            if (mRes && mRes.messages && mRes.messages.length > 0) {
+                const m = mRes.messages[0];
+                if (m.incoming) {
+                    recentAlerts.push({ isSac: true, senderName: conv.contact.name || 'Cliente', textContent: m.content || '' });
+                }
+            }
+        }
+        res.json({ alerts: recentAlerts });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/clear_chat', (req, res) => {
+    const user = req.body.user ? req.body.user.toUpperCase() : null;
+    if (user !== 'MIDNET') return res.status(403).json({ error: 'Acesso Negado.' });
+    mikwebChatMessages = []; 
+    pendingVoiceAlerts = []; 
+    if (fs.existsSync(CHAT_FILE)) fs.writeFileSync(CHAT_FILE, JSON.stringify([])); 
+    res.json({ success: true }); 
+});
+
+// â”€â”€â”€ PROXY: serve arquivos do MikWeb com autenticaÃ§Ã£o â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.get('/uploads/proxy', async (req, res) => {
+    const fileUrl = req.query.url;
+    if (!fileUrl) return res.status(400).send('URL obrigatÃ³ria');
+    try {
+        const r = await axios({ url: fileUrl, method: 'GET', responseType: 'stream',
+            headers: fileUrl.includes('mikweb.com.br') ? { 'Authorization': `Bearer ${MIKWEB_TOKEN}` } : {} });
+        res.set('Content-Type', r.headers['content-type'] || 'application/octet-stream');
+        r.data.pipe(res);
+    } catch(e) { res.status(500).send('Erro ao buscar arquivo: ' + e.message); }
+});
+
+
+// PERFIS DE VOZ - persistentes, nunca apagados
+const VOICE_PROFILES_FILE = require('path').join(__dirname, 'voice_profiles.json');
+function loadVoiceProfiles() {
+    try { if (require('fs').existsSync(VOICE_PROFILES_FILE)) return JSON.parse(require('fs').readFileSync(VOICE_PROFILES_FILE,'utf8')); } catch(e){}
+    return [];
+}
+function saveVoiceProfiles(profiles) {
+    require('fs').writeFileSync(VOICE_PROFILES_FILE, JSON.stringify(profiles,null,2),'utf8');
+}
+app.get('/api/voice-profiles', (req, res) => {
+    res.json({ profiles: loadVoiceProfiles() });
+});
+app.post('/api/voice-profiles', (req, res) => {
+    const { name, profile } = req.body;
+    if (!name || !profile) return res.status(400).json({ error: 'name e profile obrigatorios' });
+    const profiles = loadVoiceProfiles();
+    const idx = profiles.findIndex(p => p.name.toLowerCase() === name.toLowerCase());
+    const entry = { name: name.trim(), profile: profile.toUpperCase(), createdAt: new Date().toISOString() };
+    if (idx >= 0) profiles[idx] = entry; else profiles.push(entry);
+    saveVoiceProfiles(profiles);
+    console.log('[VOZ] Perfil cadastrado: ' + name + ' -> ' + profile);
+    res.json({ success: true, profiles });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    const os = require('os');
-    const networkInterfaces = os.networkInterfaces();
-    let localIP = 'localhost';
-    
-    for (const name of Object.keys(networkInterfaces)) {
-        for (const net of networkInterfaces[name]) {
-            if (net.family === 'IPv4' && !net.internal) {
-                localIP = net.address;
-                break;
-            }
-        }
-    }
-
     console.log(`=========================================`);
-    console.log(`SERVIDOR CAIN v2.5 ATIVADO`);
-    console.log(`Acesse local: http://localhost:${PORT}`);
-    console.log(`Acesse na rede: http://${localIP}:${PORT}`);
-    console.log(`MODO: Auto-Aprendizado Ativo`);
+    console.log(`SERVIDOR CAIN v2.5 ATIVADO NO PORTA ${PORT}`);
     console.log(`=========================================`);
+    // PrÃ©-carrega lista de clientes em background para primeira busca ser rÃ¡pida
+    setTimeout(() => {
+        getAllMikwebClients().then(cls => console.log(`[CACHE] ${cls.length} clientes prÃ©-carregados.`)).catch(() => {});
+    }, 2000);
 });
+
