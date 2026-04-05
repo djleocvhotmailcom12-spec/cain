@@ -1384,8 +1384,17 @@ async function initClientMap() {
     if (!_clientMap) {
         // Coordenadas iniciais: Grajaú-MA (centro médio dos clientes)
         _clientMap = L.map('client-map-container').setView([-6.09, -46.14], 14);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap'
+    }
+    
+    // Garante as camadas de Satélite/Híbrido (evita duplicar)
+    if (!window._satLayer) {
+        window._baseLayer?.remove(); // Remove antiga se existir
+        window._satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: '© Esri Satellite'
+        }).addTo(_clientMap);
+        
+        window._labelLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Esri Reference'
         }).addTo(_clientMap);
     }
 
