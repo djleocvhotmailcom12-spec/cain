@@ -1116,18 +1116,44 @@ main {
     background: var(--primary-color) !important;
 }
 
-/* Nome do cliente flutuando (Tooltip Permanente) */
+/* Estilo do Alfinete Customizado (Pin) */
+.custom-pin {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.pin-svg {
+    filter: drop-shadow(0 0 5px rgba(0,0,0,0.5));
+    transition: 0.3s;
+}
+
+.custom-pin:hover .pin-svg {
+    transform: scale(1.2) translateY(-5px);
+    filter: drop-shadow(0 0 15px currentColor);
+}
+
+/* Nome do cliente flutuando (Label de Alta Visibilidade) */
 .client-label {
-    background: rgba(0, 0, 0, 0.7) !important;
-    border: 1px solid var(--primary-color) !important;
-    color: var(--primary-color) !important;
-    font-family: 'Orbitron', sans-serif !important;
-    font-weight: bold !important;
-    font-size: 11px !important;
-    padding: 3px 8px !important;
-    border-radius: 4px !important;
-    box-shadow: 0 0 10px rgba(0, 242, 255, 0.3) !important;
+    background: rgba(10, 15, 20, 0.9) !important;
+    border: 2px solid var(--primary-color) !important;
+    color: #ffff00 !important; /* Amarelo Neon p/ contraste total no satélite */
+    font-family: 'Orbitron', 'Inter', sans-serif !important;
+    font-weight: 800 !important;
+    font-size: 13px !important;
+    padding: 5px 12px !important;
+    border-radius: 6px !important;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5), 0 0 10px rgba(0, 242, 255, 0.3) !important;
     white-space: nowrap !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+}
+
+/* Cor diferenciada para etiquetas com débito */
+.label-debt {
+    border-color: #ff004c !important;
+    color: #ff3d77 !important;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5), 0 0 10px rgba(255, 0, 76, 0.3) !important;
 }
 
 .client-label::before {

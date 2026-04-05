@@ -1415,25 +1415,39 @@ async function initClientMap() {
         }
 
         markers.forEach(m => {
-            // Usa CircleMarker para um visual mais "Radar/Sistema" (bolinha)
-            // Cor: Vermelho para Débito, Azul para Em Dia
-            const markerColor = m.hasDebt ? "#ff004c" : "#00f2ff";
+            // Estilo do Alfinete (Pin) Customizado
+            const pinColor = m.hasDebt ? "#ff004c" : "#00f2ff";
             
-            const marker = L.circleMarker([m.lat, m.lng], {
-                radius: 7,
-                fillColor: markerColor,
-                color: "#fff",
-                weight: 1.5,
-                opacity: 1,
-                fillOpacity: 0.8
+            // SVG do Alfinete Premium
+            const pinSvg = `
+                <svg width="30" height="40" viewBox="0 0 30 40" class="pin-svg" style="color: ${pinColor};">
+                    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                        <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                        <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                    </filter>
+                    <path d="M15 0C6.7 0 0 6.7 0 15c0 10.5 15 25 15 25s15-14.5 15-25c0-8.3-6.7-15-15-15z" fill="${pinColor}" filter="url(#glow)"/>
+                    <circle cx="15" cy="15" r="5" fill="white" opacity="0.8"/>
+                </svg>
+            `;
+
+            const customIcon = L.divIcon({
+                className: "custom-pin",
+                html: pinSvg,
+                iconSize: [30, 40],
+                iconAnchor: [15, 40]
+            });
+
+            const marker = L.marker([m.lat, m.lng], {
+                icon: customIcon,
+                title: m.name
             }).addTo(_clientMap);
 
-            // Adiciona o nome do cliente como uma label permanente
+            // Adiciona o nome do cliente como uma label de alta visibilidade
             marker.bindTooltip(m.name, {
                 permanent: true,
-                direction: 'top',
-                offset: [0, -10],
-                className: 'client-label'
+                direction: 'right',
+                offset: [15, -20],
+                className: `client-label ${m.hasDebt ? 'label-debt' : ''}`
             });
 
             // Popup com detalhes ao clicar (NOME + ENDEREÇO + DÉBITO)
