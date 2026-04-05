@@ -459,16 +459,25 @@ if (recognition) {
             return;
         }
 
-        // Reconhecimento automatico de perfil por voz
-        if (_voiceProfiles && _voiceProfiles.length > 0) {
+        // ─── VERIFICAÇÃO DE VOZ: saudação por nome ou rejeição ───────────────
+        // Só ativa quando o microfone permanente está ligado (alwaysListen)
+        if (alwaysListen && _voiceProfiles && _voiceProfiles.length > 0) {
             const match = matchVoiceProfile(transcript);
-            if (match && match.profile !== currentUser) {
+            if (match) {
+                // Voz reconhecida: saudar pelo nome e atualizar perfil ativo
                 currentUser = match.profile;
-                addMessage('cain', 'Voz de ' + match.name + ' reconhecida. Perfil ' + match.profile + ' ativado.');
-                speak('Ola ' + match.name + '.');
+                const greet = 'SIM ' + match.name.toUpperCase();
+                addMessage('cain', greet);
+                speak(greet);
                 const ud = document.getElementById('current-user-display');
                 if (ud) ud.textContent = currentUser;
-                return;
+                // Deixa continuar para enviar a mensagem ao servidor normalmente
+            } else {
+                // Voz NÃO cadastrada: rejeitar e descartar a pergunta
+                const reject = 'VOCÊ NÃO TEM AUTORIZAÇÃO';
+                addMessage('cain', reject);
+                speak(reject);
+                return; // descarta — não envia ao servidor
             }
         }
 
@@ -1311,14 +1320,16 @@ async function saveVoiceProfile(name, profile) {
 function matchVoiceProfile(text) {
     if (!_voiceProfiles.length) return null;
     const norm = t => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
-    const t = norm(text);
-    const words = t.split(/\s+/).filter(w => w.length >= 3);
+    const transcriptNorm = norm(text);
+    const transcriptWords = transcriptNorm.split(/\s+/);
     for (const p of _voiceProfiles) {
-        const pname = norm(p.name);
-        const pwords = pname.split(/\s+/).filter(w => w.length >= 3);
-        // Match se qualquer palavra do nome conhecido aparecer no que foi falado
-        const hit = pwords.some(pw => words.some(w => w.includes(pw) || pw.includes(w)));
-        if (hit) return p;
+        const nameNorm = norm(p.name);
+        const nameWords = nameNorm.split(/\s+/).filter(w => w.length >= 3);
+        // Cada palavra do nome deve aparecer como palavra exata no transcript
+        const allMatch = nameWords.length > 0 && nameWords.every(nw =>
+            transcriptWords.some(tw => tw === nw)
+        );
+        if (allMatch) return p;
     }
     return null;
 }
