@@ -391,6 +391,9 @@ window.onload = () => {
     setTimeout(() => { if (navigator.onLine) syncKnowledgeToLocal(); }, 2000);
     setInterval(syncIntelligence, 30000); setInterval(syncSystemStats, 5000);
     initBiometrics();
+    
+    // Verifica autenticação após carregamento parcial
+    setTimeout(checkAuthStatus, 1500);
 };
 
 // Lockdown Logic
@@ -412,11 +415,29 @@ function stopLockdown() {
 }
 async function executeWipe() { await fetch('/lockdown/wipe', { method: 'POST' }); location.reload(); }
 
-// Auth Status
-let isAuthenticatedMode = false;
+// --- SISTEMA DE AUTENTICAÇÃO RESTAURADO ---
+function checkAuthStatus() {
+    if (!isAuthenticated) {
+        const overlay = document.getElementById('security-overlay');
+        if (overlay) {
+            overlay.classList.remove('hidden');
+            speak('Modo restrito ativado. Insira suas credenciais para destravar a memória.', 'pt-BR');
+        }
+    }
+}
+
 document.getElementById('sec-login-btn')?.addEventListener('click', () => {
-    currentUser = document.getElementById('sec-name').value.toUpperCase();
-    document.getElementById('security-overlay').classList.add('hidden');
+    let name = document.getElementById('sec-name').value.trim();
+    let pass = document.getElementById('sec-pass').value.trim();
+    if (name && pass) {
+        currentUser = name.toUpperCase();
+        isAuthenticated = true;
+        document.getElementById('security-overlay').classList.add('hidden');
+        addMessage('cain', '[CAIN]: Acesso Autorizado. Banco de memória configurado para: ' + currentUser + '.');
+        speak('Acesso liberado. Bem-vindo de volta, ' + currentUser + '.', 'pt-BR');
+    } else {
+        alert('Preencha os campos Nome e Senha.');
+    }
 });
 
 // MAP INTEGRATION
